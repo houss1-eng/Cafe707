@@ -1,0 +1,12 @@
+{
+  "name": "707 Café & Resto",
+  "short_name": "707",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffc21a",
+  "lang": "fr",
+  "icons": [
+    { "src": "logo707.png", "sizes": "654x654", "type": "image/png" }
+  ]
+}

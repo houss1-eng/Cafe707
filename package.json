@@ -1,0 +1,23 @@
+{
+  "name": "cafe-707",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Application de commande 707 Café & Resto",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "db:migrate": "node db/migrate.js",
+    "db:seed": "node db/seed.js",
+    "test": "node scripts/smoke-test.js",
+    "photos": "node scripts/import-photos.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.10",
+    "express": "^4.22.3",
+    "pg": "^8.23.1",
+    "qrcode": "^1.5.4"
+  }
+}
