@@ -5,6 +5,7 @@ const { createSession, deleteSession, requireClient, hashPassword, verifyPasswor
 const { listOrders } = require("../lib/orders");
 const { bizDay, TODAY } = require("../lib/day");
 const limit = require("../lib/limit");
+const push = require("../lib/push");
 
 const router = express.Router();
 
@@ -141,6 +142,11 @@ router.post("/client/calls", requireClient, wrap(async (req, res) => {
   const { rows: [call] } = await pool.query(
     `INSERT INTO calls (floor_id, table_no, client_id, kind, payment) VALUES ($1, $2, $3, $4, $5)
      RETURNING id, kind, status`, [floorId, tableNo, req.client.id, kind, kind === "addition" ? payment || null : null]);
+  await push.toStaff({ roles: ["serveur"], floorId }, {
+    title: kind === "addition" ? `Table ${tableNo} : l'addition` : `Table ${tableNo} t'appelle`,
+    body: kind === "addition" ? `${req.client.name} demande l'addition${payment ? ` (${payment})` : ""}` : `${req.client.name} appelle le serveur`,
+    tag: `call-${call.id}`,
+  });
   res.status(201).json(call);
 }));
 
@@ -231,6 +237,17 @@ router.post("/orders", requireClient, wrap(async (req, res) => {
       "UPDATE clients SET points = points - $2 + $3 WHERE id = $1 RETURNING points", [req.client.id, usePoints, earned]);
 
     await db.query("COMMIT");
+    // Nouvelle commande : le serveur de la terrasse, puis la cuisine et le bar s'ils ont quelque chose à préparer
+    const summary = (list) => list.map(it => `${it.qty} × ${prods.find(p => p.id === it.productId).name}`).join(", ");
+    const stations = ["cuisine", "bar"].filter(st => items.some(it => it.station === st));
+    await Promise.all([
+      push.toStaff({ roles: ["serveur"], floorId }, {
+        title: `Nouvelle commande · Table ${tableNo}`, body: `N°${order.id} · ${summary(items)}`, tag: `order-${order.id}`,
+      }),
+      ...stations.map(st => push.toStaff({ roles: [st] }, {
+        title: `Commande n°${order.id} · Table ${tableNo}`, body: summary(items.filter(it => it.station === st)), tag: `order-${order.id}`,
+      })),
+    ]);
     res.status(201).json({
       orderId: order.id, subtotal: toDT(subtotalMil), discount: toDT(discountMil), total: toDT(totalMil),
       pointsUsed: usePoints, pointsEarned: earned, points: bal.points,

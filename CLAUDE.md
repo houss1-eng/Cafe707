@@ -24,6 +24,12 @@ Application de commande pour le café-restaurant 707 (Sept Cent Sept), Tunisie. 
   copié dans la réservation à la demande : un nouveau tarif ne change pas les réservations existantes.
   Seul le chef de terrain (rôle terrain) peut annuler un match : ni le client, ni l'admin (imposé côté serveur). Indépendant du bouton Dispo / Non dispo du café.
 
+- Notifications Web Push (lib/push.js, public/push.js, public/sw.js, table push_subscriptions) : arrivent même app fermée.
+  Clés VAPID créées automatiquement dans settings (ou VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY). Envois attendus avant la réponse
+  (Vercel), une erreur d'envoi ne bloque jamais l'action. Client : étapes de commande et de réservation. Serveur : commandes,
+  appels et « prête » de SA terrasse. Cuisine / bar : leurs lignes. Chef de terrain : nouvelles demandes. Admin : rien.
+  iPhone : seulement depuis l'icône sur l'écran d'accueil (iOS 16.4+).
+
 ## Espaces et sécurité
 - Client (`/`) : pas de SMS. Numéro + code personnel à 6 chiffres (clients.pin_hash), montré une seule fois à la création, en notification
   si autorisée. 5 erreurs bloquent le numéro 15 min. Code oublié : Admin → Clients. Le numéro n'est pas vérifié automatiquement.

@@ -34,7 +34,8 @@ function toast(msg) {
 
 // ---- Connexion ----
 // Affiche le formulaire dans #app, appelle onReady(staff) une fois connecté.
-async function startStaffPage({ title, subtitle, onReady }) {
+async function startStaffPage({ title, subtitle, onReady: ready }) {
+  const onReady = (staff) => { staffPush(staff); return ready(staff); };
   if (getStaffToken()) {
     try { return onReady(await api("/api/staff/me")); } catch { /* jeton invalide : formulaire */ }
   }
@@ -51,6 +52,7 @@ async function startStaffPage({ title, subtitle, onReady }) {
   $("login-user").focus();
   $("login-form").addEventListener("submit", async e => {
     e.preventDefault();
+    WebPush.ask();   // pendant le geste : obligatoire sur iPhone
     try {
       const res = await api("/api/staff/login", {
         method: "POST",
@@ -66,7 +68,39 @@ async function startStaffPage({ title, subtitle, onReady }) {
   });
 }
 
+// ---- Notifications sur l'écran du téléphone (même page fermée) ----
+// Autorisé : abonnement silencieux. Pas encore demandé : un bandeau avec un bouton.
+async function staffPush(staff) {
+  if (staff.role === "admin") return;   // l'admin ne reçoit pas de notifications
+  if (WebPush.permission() === "granted" && WebPush.supported() && !WebPush.needsInstall()) {
+    WebPush.subscribe("staff", getStaffToken());
+    return;
+  }
+  const canAsk = WebPush.supported() && !WebPush.needsInstall() && WebPush.permission() === "default";
+  const text = canAsk ? "Reçois les commandes et les appels sur ton téléphone, même page fermée." : WebPush.hint();
+  if (!text || document.getElementById("push-banner")) return;
+  try { if (sessionStorage.getItem("707-push-later")) return; } catch {}
+  const bar = document.createElement("div");
+  bar.className = "push-banner";
+  bar.id = "push-banner";
+  bar.innerHTML = `<span>${esc(text)}</span>
+    ${canAsk ? `<button class="push-yes" id="push-yes">Activer les notifications</button>` : ""}
+    <button class="push-later" id="push-later" aria-label="Plus tard">×</button>`;
+  document.body.appendChild(bar);
+  $("push-later").addEventListener("click", () => {
+    bar.remove();
+    try { sessionStorage.setItem("707-push-later", "1"); } catch {}
+  });
+  if (canAsk) $("push-yes").addEventListener("click", async () => {
+    const p = await WebPush.ask();
+    bar.remove();
+    if (p === "granted" && await WebPush.subscribe("staff", getStaffToken())) toast("Notifications activées");
+    else toast(p === "granted" ? "Activation impossible, réessaie" : "Notifications refusées");
+  });
+}
+
 async function staffLogout() {
+  await WebPush.unsubscribe();
   await api("/api/staff/logout", { method: "POST" }).catch(() => {});
   setStaffToken(null);
   location.reload();

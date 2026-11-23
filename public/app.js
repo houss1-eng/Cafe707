@@ -549,7 +549,7 @@ function drawStaffLogin(error = "") {
 
 // Chaque rôle a sa page ; elle reprend la session grâce au jeton enregistré ici
 const STAFF_PAGE = { admin: "admin.html", serveur: "serveur.html", cuisine: "cuisine.html", bar: "cuisine.html", terrain: "terrain.html" };
-async function submitStaffLogin() {
+async function submitStaffLogin(perm) {
   const username = $("staff-user").value.trim(), password = $("staff-pass").value;
   if (!username || !password) return drawStaffLogin("Écris ton identifiant et ton mot de passe.");
   const res = await fetch("/api/staff/login", {
@@ -562,6 +562,8 @@ async function submitStaffLogin() {
     return;
   }
   store.set("707-staff-token", data.token);
+  // On laisse le temps de répondre à « Autoriser les notifications » : sa page s'abonne ensuite toute seule
+  if (perm) await Promise.race([perm, new Promise(ok => setTimeout(ok, 20000))]);
   location.href = STAFF_PAGE[data.staff.role] || "admin.html";
 }
 
@@ -614,16 +616,14 @@ async function systemNotify(body) {
     new Notification("707 Café", { body, icon: "logo707.png" });
   } catch {}
 }
-function askNotify() {
-  if (!("Notification" in window)) return Promise.resolve("denied");
-  if (Notification.permission !== "default") return Promise.resolve(Notification.permission);
-  try { return Promise.resolve(Notification.requestPermission()).catch(() => "denied"); }
-  catch { return Promise.resolve("denied"); }
-}
+
+// Abonne ce téléphone aux notifications du client connecté (rien si pas autorisé)
+const syncPush = () => (CLIENT ? WebPush.subscribe("client", store.get(TOKEN_KEY)) : Promise.resolve(false));
 
 async function finishLogin(token) {
   store.set(TOKEN_KEY, token);
   await loadClient();
+  syncPush();
   renderMenu();
   startLive();
 }
@@ -649,7 +649,9 @@ async function submitLogin() {
   const btn = $("login-ok");
   btn.disabled = true;
   try {
-    if (login.who === "staff") return await submitStaffLogin();
+    // Autorisation des notifications demandée pendant le geste (obligatoire sur iPhone)
+    const perm = login.step === "phone" && login.who === "client" ? null : WebPush.ask();
+    if (login.who === "staff") return await submitStaffLogin(perm);
     if (login.step === "phone") {
       login.phone = $("phone-input").value.replace(/\D/g, "");
       if (!/^\d{8}$/.test(login.phone)) return drawLogin("Le numéro doit avoir 8 chiffres.");
@@ -660,17 +662,21 @@ async function submitLogin() {
     if (login.step === "name") {
       const name = $("name-input").value.trim();
       if (name.length < 2) return drawLogin("Écris ton prénom.");
-      const permission = askNotify();      // demandé pendant le geste du client
       const r = await api("/api/client/register", { method: "POST", body: JSON.stringify({ phone: login.phone, name }) });
       await finishLogin(r.token);
       showNewCode(r.code);
-      permission.then(p => { if (p === "granted") systemNotify(`Bienvenue ${r.client.name} ! Ton code 707 : ${r.code}`); });
+      perm.then(p => {
+        if (p !== "granted") return;
+        syncPush();
+        systemNotify(`Bienvenue ${r.client.name} ! Ton code 707 : ${r.code}`);
+      });
       return;
     }
     const code = $("code-input").value.replace(/\D/g, "");
     if (code.length !== 6) return drawLogin("Le code a 6 chiffres.");
     const r = await api("/api/client/login", { method: "POST", body: JSON.stringify({ phone: login.phone, code }) });
     await finishLogin(r.token);
+    perm.then(p => { if (p === "granted") syncPush(); });
     toast(`Salut ${CLIENT.name} · ${CLIENT.points} points`);
     continueAfterLogin();
   } catch (err) {
@@ -727,9 +733,30 @@ async function openAccount() {
           </span>
         </button>`).join("") : `<p class="hint">Pas encore de commande.</p>`}
     </div>
+    ${pushBlock()}
     <button class="order-btn ghost" id="logout-btn">Se déconnecter</button>
     <button class="link code-copy" id="staff-link">Espace personnel</button>
   `;
+}
+
+// Notifications sur l'écran du téléphone : état + bouton pour les activer
+function pushBlock() {
+  const on = WebPush.permission() === "granted" && WebPush.supported() && !WebPush.needsInstall();
+  return `
+    <div class="opt-group push-box">
+      <h4>Notifications</h4>
+      ${on ? `<p class="hint push-on">${ic("check")}Activées : tu es prévenu dès que ta commande avance, même app fermée.</p>`
+        : `<p class="hint">${esc(WebPush.hint() || "Sois prévenu sur ton téléphone quand ta commande est prête ou ton match confirmé.")}</p>
+           ${WebPush.supported() && !WebPush.needsInstall() && WebPush.permission() === "default"
+             ? `<button class="order-btn" id="push-btn">${ic("bell")}Activer les notifications</button>` : ""}`}
+    </div>`;
+}
+async function enablePush() {
+  const p = await WebPush.ask();
+  if (p === "granted" && await syncPush()) toast("Notifications activées");
+  else if (p !== "granted") toast("Notifications refusées");
+  else toast("Activation impossible, réessaie");
+  if (sheetMode === "account") openAccount();
 }
 
 const dateTime = (d) => new Date(d).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -758,6 +785,7 @@ function openReceipt(id) {
 }
 
 async function logout() {
+  await WebPush.unsubscribe();
   await api("/api/client/logout", { method: "POST" }).catch(() => {});
   store.set(TOKEN_KEY, null);
   CLIENT = null;
@@ -837,6 +865,7 @@ $("sheet").addEventListener("click", e => {
     case "account": {
       if (t("#logout-btn")) return logout();
       if (t("#staff-link")) return openLogin(null, "staff");
+      if (t("#push-btn")) return enablePush();
       const r = t("[data-receipt]");
       if (r) openReceipt(Number(r.dataset.receipt));
       break;
@@ -1086,7 +1115,7 @@ function notify(msg) {
 
 function startLive() {
   // Permission des notifications demandée après un geste (commande, appel)
-  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+  WebPush.ask().then(p => { if (p === "granted") syncPush(); });
   if (liveTimer) return pollLive();
   liveTimer = setInterval(pollLive, 7000);
   pollLive();
@@ -1139,7 +1168,7 @@ async function init() {
     renderTabs();
     renderMenu();
     renderCart();
-    if (CLIENT) startLive();
+    if (CLIENT) { startLive(); syncPush(); }
   } catch (err) {
     $("menu").innerHTML = `<li class="empty">Menu indisponible : ${esc(err.message)}.<br>Vérifie ta connexion.</li>`;
   }

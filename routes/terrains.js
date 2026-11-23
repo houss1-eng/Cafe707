@@ -5,6 +5,7 @@ const pool = require("../db/pool");
 const { HttpError, wrap, toDT } = require("../lib/http");
 const { requireClient, requireStaff } = require("../lib/auth");
 const { TZ } = require("../lib/day");
+const push = require("../lib/push");
 
 const router = express.Router();
 const DAYS_AHEAD = 30;
@@ -21,6 +22,8 @@ const validDay = (s) => {
   const t = Date.parse(`${s}T00:00:00Z`);
   return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === s;
 };
+// « 23/11 à 21 h » pour les notifications
+const slotLabel = (day, hour) => `${day.slice(8, 10)}/${day.slice(5, 7)} à ${hour % 24} h`;
 const idOf = (v) => {
   const n = Number(v);
   if (!Number.isInteger(n) || n < 1 || n > 2147483647) throw new HttpError(404, "Introuvable");
@@ -121,6 +124,9 @@ router.post("/client/reservations", requireClient, wrap(async (req, res) => {
       `INSERT INTO reservations (pitch_id, client_id, day, hour, price_mil) VALUES ($1, $2, $3, $4, $5) RETURNING id, status`,
       [p.id, req.client.id, day, hour, p.price_mil]);
     await db.query("COMMIT");
+    await push.toStaff({ roles: ["terrain"] }, {
+      title: `Demande · ${p.name}`, body: `${req.client.name} (${req.client.phone}) · ${slotLabel(day, hour)}`, tag: `resa-${r.id}`,
+    });
     res.status(201).json({ ...r, phone: req.client.phone });
   } catch (err) {
     await db.query("ROLLBACK").catch(() => {});
@@ -166,22 +172,35 @@ router.patch("/terrain/reservations/:id", wrap(async (req, res) => {
   try {
     await db.query("BEGIN");
     const { rows: [r] } = await db.query(
-      `SELECT r.id, r.pitch_id, r.day, r.hour, r.status, ${IS_FUTURE} AS future FROM reservations r WHERE r.id = $1 FOR UPDATE`, [id]);
+      `SELECT r.id, r.pitch_id, r.client_id, to_char(r.day, 'YYYY-MM-DD') AS day_text, r.day, r.hour, r.status, ${IS_FUTURE} AS future
+         FROM reservations r WHERE r.id = $1 FOR UPDATE`, [id]);
     if (!r) throw new HttpError(404, "Réservation introuvable");
     if (!(ALLOWED[r.status] || []).includes(status)) throw new HttpError(409, "Cette réservation a déjà été traitée");
     if (status === "confirmee" && !r.future) throw new HttpError(409, "Ce créneau est déjà passé");
 
     await db.query("UPDATE reservations SET status = $1, handled_by = $2, handled_at = now() WHERE id = $3", [status, req.staff.id, id]);
-    let autoRefused = 0;
+    let autoRefused = 0, refusedClients = [];
     if (status === "confirmee") {
       // Le créneau est pris : les autres demandes sur la même heure tombent
       const other = await db.query(
         `UPDATE reservations SET status = 'refusee', handled_by = $1, handled_at = now()
-          WHERE pitch_id = $2 AND day = $3 AND hour = $4 AND status = 'en_attente' AND id <> $5`,
+          WHERE pitch_id = $2 AND day = $3 AND hour = $4 AND status = 'en_attente' AND id <> $5 RETURNING id, client_id`,
         [req.staff.id, r.pitch_id, r.day, r.hour, id]);
       autoRefused = other.rowCount;
+      refusedClients = other.rows;
     }
     await db.query("COMMIT");
+    const { rows: [pitch] } = await pool.query("SELECT name FROM pitches WHERE id = $1", [r.pitch_id]);
+    const slot = `${pitch ? pitch.name : "Terrain"} · ${slotLabel(r.day_text, r.hour)}`;
+    const RESA_MSG = {
+      confirmee: { title: "Match confirmé", body: `${slot}. À bientôt au 707 Club !` },
+      refusee: { title: "Créneau non disponible", body: `${slot} : ta demande n'a pas pu être acceptée.` },
+      annulee: { title: "Match annulé", body: `${slot} a été annulé par le 707 Club.` },
+    };
+    await Promise.all([
+      push.toClient(r.client_id, { ...RESA_MSG[status], tag: `resa-${id}` }),
+      ...refusedClients.map(x => push.toClient(x.client_id, { ...RESA_MSG.refusee, tag: `resa-${x.id}` })),
+    ]);
     res.json({ id, status, autoRefused });
   } catch (err) {
     await db.query("ROLLBACK").catch(() => {});

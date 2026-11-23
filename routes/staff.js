@@ -4,6 +4,15 @@ const { HttpError, wrap } = require("../lib/http");
 const auth = require("../lib/auth");
 const { NEXT, listOrders } = require("../lib/orders");
 const { bizDay, TODAY } = require("../lib/day");
+const push = require("../lib/push");
+
+// Ce que le client voit sur son écran quand sa commande change
+const CLIENT_MSG = {
+  en_preparation: (o) => ({ title: "Commande en préparation", body: `Ta commande n°${o.id} est en préparation.` }),
+  servie: (o) => ({ title: "Bon appétit !", body: `Ta commande n°${o.id} est servie.` }),
+  payee: (o) => ({ title: "Merci !", body: o.points_earned > 0 ? `Commande n°${o.id} payée · +${o.points_earned} points` : `Commande n°${o.id} payée.` }),
+  annulee: (o) => ({ title: "Commande annulée", body: `Ta commande n°${o.id} a été annulée. Tes points t'ont été rendus.` }),
+};
 
 const router = express.Router();
 const floorStaff = auth.requireStaff("serveur", "admin");
@@ -86,6 +95,7 @@ router.patch("/staff/orders/:id", floorStaff, wrap(async (req, res) => {
       "UPDATE orders SET status = $2, handled_by = COALESCE(handled_by, $3), updated_at = now() WHERE id = $1",
       [id, status, req.staff.id]);
     await db.query("COMMIT");
+    if (CLIENT_MSG[status]) await push.toClient(o.client_id, { ...CLIENT_MSG[status](o), tag: `order-${id}` });
     res.json({ id, status });
   } catch (err) {
     await db.query("ROLLBACK").catch(() => {});
@@ -163,7 +173,13 @@ router.post("/kitchen/orders/:id/ready", kitchenStaff, wrap(async (req, res) => 
     `UPDATE orders SET ready_at = now(), updated_at = now()
       WHERE id = $1 AND ready_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM order_items WHERE order_id = $1 AND ready_at IS NULL)
-      RETURNING id`, [id]);
+      RETURNING id, client_id, floor_id, table_no`, [id]);
+  if (o) {
+    await Promise.all([
+      push.toClient(o.client_id, { title: "Ta commande est prête", body: `Commande n°${id} : ton serveur te l'apporte.`, tag: `order-${id}` }),
+      push.toStaff({ roles: ["serveur"], floorId: o.floor_id }, { title: `Prête à servir · Table ${o.table_no}`, body: `Commande n°${id}`, tag: `order-${id}` }),
+    ]);
+  }
   res.json({ id, station, orderReady: !!o });
 }));
 
