@@ -26,7 +26,7 @@ function loadJsQr() {
   if (!jsQrLoading) {
     jsQrLoading = new Promise((ok, ko) => {
       const s = document.createElement("script");
-      s.src = "vendor/jsQR.js?v=16";
+      s.src = "vendor/jsQR.js?v=18";
       s.onload = ok;
       s.onerror = () => { jsQrLoading = null; ko(new Error("lecteur")); };
       document.head.appendChild(s);

@@ -201,3 +201,6 @@ function ding() {
     o.stop(audioCtx.currentTime + t + 0.16);
   });
 }
+
+// Safari (iPhone) ignore user-scalable=no : on bloque le pincement ici
+["gesturestart", "gesturechange"].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));

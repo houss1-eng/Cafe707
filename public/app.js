@@ -503,30 +503,79 @@ function toggleOpt(id) {
 
 // ---- Connexion sans SMS : numéro + code personnel ----
 let afterLogin = null;
-let login = { step: "phone", phone: "" };
+let login = { who: "client", step: "phone", phone: "" };
 let newCode = "";
 
 function renderAccountPill() {
   $("acc-label").textContent = CLIENT ? `${CLIENT.points} pts` : "Compte";
+  $("login-label").textContent = CLIENT ? "Compte" : "Connexion";
   renderPlace();   // le message d'accueil dépend du client
 }
 
-function openLogin(then = null) {
+// who : "client" (numéro + code, ou création du compte) ou "staff" (admin, serveur, cuisine, bar, chef de terrain)
+function openLogin(then = null, who = "client") {
   afterLogin = then;
-  login = { step: "phone", phone: "" };
+  login = { who, step: "phone", phone: "" };
   showSheet("login");
   drawLogin();
 }
 
+// Onglets Client / Personnel, seulement au premier écran
+const loginTabs = () => `
+  <div class="seg login-tabs" role="tablist">
+    <button class="seg-opt${login.who === "client" ? " on" : ""}" data-who="client" role="tab" aria-selected="${login.who === "client"}">Client</button>
+    <button class="seg-opt${login.who === "staff" ? " on" : ""}" data-who="staff" role="tab" aria-selected="${login.who === "staff"}">Personnel</button>
+  </div>`;
+
+function drawStaffLogin(error = "") {
+  $("sheet").innerHTML = `
+    ${closeBtn}
+    ${loginTabs()}
+    <h3>Espace personnel</h3>
+    <p class="base">Admin, serveur, cuisine, bar ou chef de terrain : connecte-toi avec ton identifiant. Tu arrives directement sur ton espace.</p>
+    <div class="opt-group">
+      <h4>Identifiant</h4>
+      <input class="search" id="staff-user" type="text" placeholder="Ex. serveur1" autocomplete="username" autocapitalize="none" spellcheck="false">
+    </div>
+    <div class="opt-group">
+      <h4>Mot de passe</h4>
+      <input class="search" id="staff-pass" type="password" placeholder="Mot de passe" autocomplete="current-password">
+    </div>
+    <p class="form-error" id="login-error">${esc(error)}</p>
+    <button class="order-btn" id="login-ok">Se connecter</button>
+  `;
+  setTimeout(() => { const el = $("staff-user"); if (el) el.focus(); }, 50);
+}
+
+// Chaque rôle a sa page ; elle reprend la session grâce au jeton enregistré ici
+const STAFF_PAGE = { admin: "admin.html", serveur: "serveur.html", cuisine: "cuisine.html", bar: "cuisine.html", terrain: "terrain.html" };
+async function submitStaffLogin() {
+  const username = $("staff-user").value.trim(), password = $("staff-pass").value;
+  if (!username || !password) return drawStaffLogin("Écris ton identifiant et ton mot de passe.");
+  const res = await fetch("/api/staff/login", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    drawStaffLogin(data.error || "Connexion impossible");
+    $("staff-user").value = username;
+    return;
+  }
+  store.set("707-staff-token", data.token);
+  location.href = STAFF_PAGE[data.staff.role] || "admin.html";
+}
+
 function drawLogin(error = "") {
+  if (login.who === "staff") return drawStaffLogin(error);
   const { step } = login;
   const shown = esc(login.phone.replace(/(\d{2})(\d{3})(\d{3})/, "$1 $2 $3"));
   $("sheet").innerHTML = `
     ${closeBtn}
+    ${step === "phone" ? loginTabs() : ""}
     <h3>${step === "name" ? "Bienvenue au 707 !" : step === "code" ? "Content de te revoir" : "Ton espace client"}</h3>
     <p class="base">${step === "name" ? `Crée ton compte avec le ${shown}.`
       : step === "code" ? `Écris ton code personnel pour le ${shown}.`
-      : "Ton numéro te permet de gagner des points, de les utiliser et de suivre tes commandes."}</p>
+      : "Déjà client ? Ton numéro puis ton code. Nouveau ? On crée ton compte avec ton numéro : tu gagnes des points et tu suis tes commandes."}</p>
     ${step === "phone" ? `
       <div class="opt-group">
         <h4>Numéro de téléphone</h4>
@@ -600,6 +649,7 @@ async function submitLogin() {
   const btn = $("login-ok");
   btn.disabled = true;
   try {
+    if (login.who === "staff") return await submitStaffLogin();
     if (login.step === "phone") {
       login.phone = $("phone-input").value.replace(/\D/g, "");
       if (!/^\d{8}$/.test(login.phone)) return drawLogin("Le numéro doit avoir 8 chiffres.");
@@ -678,6 +728,7 @@ async function openAccount() {
         </button>`).join("") : `<p class="hint">Pas encore de commande.</p>`}
     </div>
     <button class="order-btn ghost" id="logout-btn">Se déconnecter</button>
+    <button class="link code-copy" id="staff-link">Espace personnel</button>
   `;
 }
 
@@ -769,10 +820,13 @@ $("sheet").addEventListener("click", e => {
       }
       break;
     }
-    case "login":
+    case "login": {
+      const who = t("[data-who]");
+      if (who && who.dataset.who !== login.who) { login = { who: who.dataset.who, step: "phone", phone: "" }; return drawLogin(); }
       if (t("#login-ok")) submitLogin();
       if (t("#resend")) { login.step = "phone"; drawLogin(); }
       break;
+    }
     case "code":
       if (t("#code-copy")) {
         Promise.resolve().then(() => navigator.clipboard.writeText(newCode))
@@ -782,6 +836,7 @@ $("sheet").addEventListener("click", e => {
       break;
     case "account": {
       if (t("#logout-btn")) return logout();
+      if (t("#staff-link")) return openLogin(null, "staff");
       const r = t("[data-receipt]");
       if (r) openReceipt(Number(r.dataset.receipt));
       break;
@@ -807,7 +862,7 @@ $("sheet").addEventListener("input", e => {
 });
 $("sheet").addEventListener("keydown", e => {
   if (e.key !== "Enter") return;
-  if (["phone-input", "code-input", "name-input"].includes(e.target.id)) submitLogin();
+  if (["phone-input", "code-input", "name-input", "staff-user", "staff-pass"].includes(e.target.id)) submitLogin();
 });
 // Le code du nouveau client ne se ferme que par « C'est noté »
 $("sheet-bg").addEventListener("click", e => { if (e.target.id === "sheet-bg" && sheetMode !== "code") closeSheet(); });
@@ -863,6 +918,7 @@ $("search").addEventListener("input", e => { search = e.target.value; renderMenu
 $("logo-btn").addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
 $("points-pill").addEventListener("click", () => (CLIENT ? openAccount() : openLogin()));
 $("call-btn").addEventListener("click", openCall);
+$("login-btn").addEventListener("click", () => (CLIENT ? openAccount() : openLogin()));
 $("place-btn").addEventListener("click", () => openPlace());
 // Barre de navigation du bas
 function setNav(id) {
@@ -1090,3 +1146,6 @@ async function init() {
 }
 
 init();
+
+// Safari (iPhone) ignore user-scalable=no : on bloque le pincement ici
+["gesturestart", "gesturechange"].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
