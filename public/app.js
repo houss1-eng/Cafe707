@@ -105,6 +105,7 @@ function renderPlace() {
   $("place-text").textContent = ok ? label : "Scanne le QR code de ta table";
   $("place-btn").classList.toggle("missing", !ok);
   $("cover-place").hidden = !ok;
+  $("scan-btn").hidden = ok;
   $("cover-place").innerHTML = `${ic("pin")}${esc(label)}`;
   $("hello").innerHTML = CLIENT ? `Bonjour,<b>${esc(CLIENT.name)}</b>` : "Bienvenue au<b>707 Café &amp; Resto</b>";
   $("bill-sub").textContent = ok ? label : "707 · Café & Resto";
@@ -718,20 +719,13 @@ async function logout() {
   toast("Déconnecté");
 }
 
-// ---- Pas de table connue : il faut scanner le QR code ----
-function openPlace() {
-  showSheet("place", `
-    ${closeBtn}
-    <h3>Scanne ta table</h3>
-    <p class="base">Ouvre l'appareil photo de ton téléphone et scanne le QR code posé sur ta table. On saura tout de suite où t'apporter ta commande.</p>
-    <button class="order-btn" id="place-ok">J'ai compris</button>
-  `);
-}
+// ---- Pas de table connue : la caméra s'ouvre pour scanner le QR code (scanner.js) ----
+const openPlace = (next = null) => openScanner(next);
 
 // ---- Appeler le serveur / l'addition ----
 function openCall() {
   // Fermé : seule l'addition reste possible, pour les clients encore à table
-  if (!validPlace(place)) return openPlace();
+  if (!validPlace(place)) return openPlace(openCall);
   if (!CLIENT) return openLogin(openCall);
   showSheet("call", `
     ${closeBtn}
@@ -775,9 +769,6 @@ $("sheet").addEventListener("click", e => {
       }
       break;
     }
-    case "place":
-      if (t("#place-ok")) closeSheet();
-      break;
     case "login":
       if (t("#login-ok")) submitLogin();
       if (t("#resend")) { login.step = "phone"; drawLogin(); }
@@ -872,7 +863,7 @@ $("search").addEventListener("input", e => { search = e.target.value; renderMenu
 $("logo-btn").addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
 $("points-pill").addEventListener("click", () => (CLIENT ? openAccount() : openLogin()));
 $("call-btn").addEventListener("click", openCall);
-$("place-btn").addEventListener("click", () => { if (!validPlace(place)) openPlace(); });
+$("place-btn").addEventListener("click", () => openPlace());
 // Barre de navigation du bas
 function setNav(id) {
   document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("on", b.id === id));
@@ -935,7 +926,7 @@ $("reorder-btn").addEventListener("click", () => {
 function startOrder() {
   if (sending || !cart.size) return;
   if (!IS_OPEN) return toast("Le 707 est fermé pour le moment");
-  if (!validPlace(place)) return openPlace();
+  if (!validPlace(place)) return openPlace(startOrder);
   if (!CLIENT) return openLogin(startOrder);
   sendOrder();
 }
