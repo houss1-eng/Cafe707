@@ -99,6 +99,22 @@ function forgetPlace() {
   store.set(PLACE_KEY, null);
   renderPlace();
 }
+
+// Chaque commande demande un nouveau scan (le client a pu changer de table).
+// La table de la dernière commande reste utilisable pour appeler le serveur ou demander l'addition.
+const CALL_PLACE_KEY = "707-call-place";
+function loadCallPlace() {
+  try {
+    const saved = JSON.parse(store.get(CALL_PLACE_KEY));
+    if (saved && saved.at && Date.now() - saved.at < PLACE_TTL && validPlace(saved)) return saved;
+  } catch {}
+  return null;
+}
+const callPlace = () => (validPlace(place) ? place : loadCallPlace());
+function placeUsed() {
+  store.set(CALL_PLACE_KEY, JSON.stringify({ ...place, at: Date.now() }));
+  forgetPlace();
+}
 function renderPlace() {
   const ok = validPlace(place);
   const label = ok ? `${floorName(place.floorId)} · Table ${place.table}` : "";
@@ -804,22 +820,25 @@ const openPlace = (next = null) => openScanner(next);
 // ---- Appeler le serveur / l'addition ----
 function openCall() {
   // Fermé : seule l'addition reste possible, pour les clients encore à table
-  if (!validPlace(place)) return openPlace(openCall);
+  const at = callPlace();
+  if (!at) return openPlace(openCall);
   if (!CLIENT) return openLogin(openCall);
   showSheet("call", `
     ${closeBtn}
     <h3>Appeler le serveur</h3>
-    <p class="base">${esc(floorName(place.floorId))} · Table ${esc(place.table)}</p>
+    <p class="base">${esc(floorName(at.floorId))} · Table ${esc(at.table)}</p>
     <button class="call-opt" data-call="serveur" ${IS_OPEN ? "" : "hidden"}><span>${ic("bell")}</span><b>Appeler le serveur</b><small>Il passe à ta table</small></button>
     <button class="call-opt" data-call="addition"><span>${ic("list")}</span><b>Demander l'addition</b><small>Ton serveur te l'apporte</small></button>
   `);
 }
 
 async function sendCall(kind) {
+  const at = callPlace();
+  if (!at) return openPlace(openCall);
   try {
     await api("/api/client/calls", {
       method: "POST",
-      body: JSON.stringify({ floorId: place.floorId, table: place.table, kind }),
+      body: JSON.stringify({ floorId: at.floorId, table: at.table, kind }),
     });
     closeSheet();
     toast(kind === "addition" ? "Ton serveur arrive avec l'addition" : "Ton serveur est prévenu");
@@ -1031,6 +1050,7 @@ async function sendOrder() {
     cart.clear();
     usePoints = false;
     setDock(false);
+    placeUsed();
     toast(`Commande n°${res.orderId} envoyée · ${fmt(res.total)} DT · +${res.pointsEarned} pts`);
     startLive();
   } catch (err) {

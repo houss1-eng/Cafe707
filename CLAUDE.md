@@ -10,7 +10,7 @@ Application de commande pour le café-restaurant 707 (Sept Cent Sept), Tunisie. 
 - Paiement à table : le client ne choisit rien. Le serveur note Espèces ou Carte à l'encaissement (paid_method, paid_by).
 - 3 terrasses (table `floors`, avec table_from/table_to). La table vient uniquement du QR code (?etage=1&table=4) :
   le client ne choisit rien. Bouton « Scanner » = caméra dans l'app (public/scanner.js, BarcodeDetector ou public/vendor/jsQR.js ;
-  https obligatoire pour la caméra). Retenue 4 h sur le téléphone, puis il doit rescanner.
+  https obligatoire pour la caméra). Chaque commande envoyée demande un nouveau scan ; la table de la dernière commande reste 4 h pour appeler le serveur ou l'addition.
 - Journée de travail : Africa/Tunis, commence à 5 h (lib/day.js). « Aujourd'hui », caisse et rapports l'utilisent.
 - Statuts : nouvelle → en_preparation → servie → payee ; annulee depuis nouvelle/en_preparation.
   ready_at : cuisine + bar ont tout préparé (par ligne : order_items.station / ready_at).
