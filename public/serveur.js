@@ -107,6 +107,7 @@ startStaffPage({
   subtitle: "Connecte-toi pour voir les commandes de ta terrasse.",
   onReady(staff) {
     if (staff.role === "cuisine" || staff.role === "bar") return location.replace("cuisine.html");
+    if (staff.role === "terrain") return location.replace("terrain.html");
     me = staff;
     renderShell();
     load();

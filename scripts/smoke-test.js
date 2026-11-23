@@ -139,6 +139,67 @@ const staff = (username, password = "707707") => call("POST", "/staff/login", { 
   ok("export CSV", csv.s === 200 && csv.text.split("\r\n").length === 4);
   ok("serveur sans accès admin", (await call("GET", "/admin/cash", null, s1.token)).s === 403);
 
+  // ---- Café disponible / non disponible ----
+  ok("un serveur ne peut pas fermer le café", (await call("PATCH", "/admin/status", { open: false }, s1.token)).s === 403);
+  ok("fermeture par l'admin", (await call("PATCH", "/admin/status", { open: false }, a.token)).open === false);
+  ok("le client voit le café fermé", (await call("GET", "/status")).open === false && (await call("GET", "/menu")).open === false);
+  ok("commande refusée quand c'est fermé", (await call("POST", "/orders", { floorId: 1, table: "5", lines: [{ productId: 1, qty: 1 }] }, T)).s === 409);
+  ok("appel serveur refusé quand c'est fermé", (await call("POST", "/client/calls", { floorId: 1, table: "6", kind: "serveur" }, T)).s === 409);
+  await new Promise(r => setTimeout(r, 21000)); // anti-spam : un appel par client toutes les 20 s
+  ok("l'addition reste possible", (await call("POST", "/client/calls", { floorId: 1, table: "6", kind: "addition" }, T)).status === "ouvert");
+  ok("réouverture", (await call("PATCH", "/admin/status", { open: true }, a.token)).open === true);
+  ok("commande acceptée après réouverture", !!(await call("POST", "/orders", { floorId: 1, table: "5", lines: [{ productId: 1, qty: 1 }] }, T)).orderId);
+
+  // ---- Terrains de foot ----
+  const chef = await staff("terrain");
+  const field = await call("GET", "/pitches");
+  ok("3 terrains", field.pitches.length === 3);
+  const cal = await call("GET", "/pitches/1/calendar");
+  ok("calendrier sur 30 jours", cal.days.length === 30);
+  const slot = { pitchId: 1, day: cal.days[2].day, hour: 20 };
+  const isFree = async () => (await call("GET", `/pitches/1/slots?day=${slot.day}`)).slots.find(x => x.hour === 20).state;
+  ok("réservation sans connexion refusée", (await call("POST", "/client/reservations", slot)).s === 401);
+  ok("date hors calendrier refusée", (await call("POST", "/client/reservations", { ...slot, day: "2020-01-01" }, T)).s === 400);
+  ok("heure fermée refusée", (await call("POST", "/client/reservations", { ...slot, hour: 3 }, T)).s === 400);
+  const rA = await call("POST", "/client/reservations", slot, T);
+  ok("demande du client", rA.status === "en_attente");
+  ok("même demande refusée", (await call("POST", "/client/reservations", slot, T)).s === 409);
+  ok("créneau encore libre avant confirmation", (await isFree()) === "libre");
+  const other = await clientLogin("55999888", "Karim");
+  const rB = await call("POST", "/client/reservations", slot, other.token);
+  ok("autre demande sur le même créneau", rB.status === "en_attente");
+  ok("les créneaux publics ne montrent aucun numéro", !JSON.stringify(await call("GET", `/pitches/1/slots?day=${slot.day}`)).includes("55123456"));
+  ok("serveur sans accès aux terrains", (await call("GET", "/terrain/board", null, s1.token)).s === 403);
+  ok("client sans accès aux terrains", (await call("GET", "/terrain/board", null, T)).s === 401);
+  const board = await call("GET", `/terrain/board?day=${slot.day}`, null, chef.token);
+  ok("le chef voit le numéro", board.pending.some(r => r.id === rA.id && r.phone === "55123456"));
+  ok("l'admin voit les demandes", (await call("GET", "/terrain/board", null, a.token)).pending.length === 2);
+  const done = await call("PATCH", `/terrain/reservations/${rA.id}`, { status: "confirmee" }, chef.token);
+  ok("le chef confirme le match", done.status === "confirmee" && done.autoRefused === 1);
+  ok("créneau éteint après confirmation", (await isFree()) === "reserve");
+  ok("l'autre demande est refusée", (await call("GET", "/client/reservations", null, other.token)).find(r => r.id === rB.id).status === "refusee");
+  ok("nouvelle demande refusée sur créneau pris", (await call("POST", "/client/reservations", slot, other.token)).s === 409);
+  ok("le client ne peut pas annuler son match", (await call("DELETE", `/client/reservations/${rA.id}`, null, T)).s === 404);
+  ok("l'admin ne peut pas annuler un match", (await call("PATCH", `/terrain/reservations/${rA.id}`, { status: "annulee" }, a.token)).s === 403);
+  ok("le match reste confirmé", (await isFree()) === "reserve");
+  ok("double traitement refusé", (await call("PATCH", `/terrain/reservations/${rA.id}`, { status: "refusee" }, chef.token)).s === 409);
+  ok("le chef annule le match", (await call("PATCH", `/terrain/reservations/${rA.id}`, { status: "annulee" }, chef.token)).status === "annulee");
+  ok("créneau rallumé après annulation", (await isFree()) === "libre");
+  ok("le client voit l'annulation du chef", (await call("GET", "/client/reservations", null, T)).find(r => r.id === rA.id).status === "annulee");
+
+  // ---- Prix des terrains ----
+  ok("un serveur ne fixe pas le prix", (await call("PATCH", "/admin/pitches/1", { price: 60 }, s1.token)).s === 403);
+  ok("le chef ne fixe pas le prix", (await call("PATCH", "/admin/pitches/1", { price: 60 }, chef.token)).s === 403);
+  ok("prix négatif refusé", (await call("PATCH", "/admin/pitches/1", { price: -5 }, a.token)).s === 400);
+  ok("prix zéro refusé", (await call("PATCH", "/admin/pitches/1", { price: 0 }, a.token)).s === 400);
+  ok("l'admin fixe le prix", (await call("PATCH", "/admin/pitches/1", { price: 60.5 }, a.token)).price === 60.5);
+  ok("le client voit le prix", (await call("GET", "/pitches")).pitches[0].price === 60.5);
+  const priced = await call("POST", "/client/reservations", slot, T);
+  await call("PATCH", "/admin/pitches/1", { price: 80 }, a.token);
+  ok("la réservation garde son prix", (await call("GET", "/client/reservations", null, T)).find(r => r.id === priced.id).price === 60.5);
+  ok("le chef voit le prix", (await call("GET", "/terrain/board", null, chef.token)).pending.find(r => r.id === priced.id).price === 60.5);
+  ok("l'admin peut retirer le prix", (await call("PATCH", "/admin/pitches/1", { price: null }, a.token)).price === null);
+
   console.log(failed ? `\n${failed} test(s) en échec` : "\nTous les tests passent.");
   process.exitCode = failed ? 1 : 0;
 })().catch(err => { console.error(err); process.exitCode = 1; });

@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 const express = require("express");
 const pool = require("../db/pool");
-const { HttpError, wrap } = require("../lib/http");
+const { HttpError, wrap, toMil, toDT } = require("../lib/http");
 const auth = require("../lib/auth");
 const { bizDay, TODAY, isDate } = require("../lib/day");
 
@@ -28,6 +28,32 @@ const int = (v, name, min = 0, max = 1e6) => {
   if (!Number.isInteger(n) || n < min || n > max) throw new HttpError(400, `${name} invalide`);
   return n;
 };
+
+// =====================================================================
+// Café disponible / non disponible
+// =====================================================================
+router.patch("/admin/status", wrap(async (req, res) => {
+  const { open } = req.body || {};
+  if (typeof open !== "boolean") throw new HttpError(400, "État invalide");
+  await pool.query("UPDATE settings SET is_open = $1, updated_by = $2, updated_at = now() WHERE id = 1", [open, req.staff.id]);
+  res.json({ open });
+}));
+
+// =====================================================================
+// Prix des terrains (null = pas encore fixé)
+// =====================================================================
+router.patch("/admin/pitches/:id", wrap(async (req, res) => {
+  const id = int(req.params.id, "Terrain", 1, 2147483647);
+  const { price } = req.body || {};
+  if (price !== null && (typeof price !== "number" || !Number.isFinite(price) || price <= 0 || price > 9999)) {
+    throw new HttpError(400, "Prix invalide");
+  }
+  const mil = price === null ? null : toMil(price);
+  if (mil === 0) throw new HttpError(400, "Prix invalide");
+  const { rows } = await pool.query("UPDATE pitches SET price_mil = $2 WHERE id = $1 RETURNING price_mil", [id, mil]);
+  if (!rows.length) throw new HttpError(404, "Terrain introuvable");
+  res.json({ id, price: mil === null ? null : toDT(mil) });
+}));
 
 // =====================================================================
 // Tableau de bord (aujourd'hui)
@@ -322,13 +348,13 @@ router.delete("/admin/floors/:id", wrap(async (req, res) => {
 // =====================================================================
 // Équipe
 // =====================================================================
-const ROLES = ["serveur", "cuisine", "bar", "admin"];
+const ROLES = ["serveur", "cuisine", "bar", "terrain", "admin"];
 
 router.get("/admin/staff", wrap(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT s.id, s.name, s.username, s.role, s.floor_id, f.name AS floor_name, s.active
        FROM staff s LEFT JOIN floors f ON f.id = s.floor_id
-      ORDER BY array_position(ARRAY['admin','serveur','cuisine','bar'], s.role), f.position, s.name`);
+      ORDER BY array_position(ARRAY['admin','serveur','cuisine','bar','terrain'], s.role), f.position, s.name`);
   res.json(rows);
 }));
 
@@ -472,7 +498,7 @@ router.get("/admin/reports", wrap(async (req, res) => {
     pool.query(`SELECT COALESCE(s.name, 'Pas encore encaissé') AS name, count(*)::int AS orders, sum(o.total)::float AS revenue
                   FROM orders o LEFT JOIN staff s ON s.id = o.paid_by WHERE ${inPeriod}
                  GROUP BY s.name ORDER BY revenue DESC`, p),
-    pool.query(`SELECT COALESCE(o.paid_method, o.payment) AS method, count(*)::int AS orders, sum(o.total)::float AS revenue
+    pool.query(`SELECT COALESCE(o.paid_method, o.payment, 'Pas encore encaissé') AS method, count(*)::int AS orders, sum(o.total)::float AS revenue
                   FROM orders o WHERE ${inPeriod} GROUP BY 1 ORDER BY 1`, p),
     pool.query(`SELECT p.name, p.icon, sum(oi.qty)::int AS qty, sum(oi.qty * oi.unit_price)::float AS revenue
                   FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN products p ON p.id = oi.product_id
@@ -491,7 +517,7 @@ router.get("/admin/reports.csv", wrap(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT o.id, to_char(o.created_at AT TIME ZONE 'Africa/Tunis', 'YYYY-MM-DD HH24:MI') AS date, f.name AS terrasse,
             o.table_no, c.name AS client, COALESCE(pb.name, st.name) AS serveur, o.status,
-            COALESCE(o.paid_method, o.payment) AS paiement, o.subtotal, o.discount, o.total, o.points_used, o.points_earned,
+            COALESCE(o.paid_method, o.payment, 'Pas encore encaissé') AS paiement, o.subtotal, o.discount, o.total, o.points_used, o.points_earned,
             (SELECT string_agg(oi.qty || 'x ' || pr.name, ', ' ORDER BY oi.id)
                FROM order_items oi JOIN products pr ON pr.id = oi.product_id WHERE oi.order_id = o.id) AS articles
        FROM orders o JOIN floors f ON f.id = o.floor_id

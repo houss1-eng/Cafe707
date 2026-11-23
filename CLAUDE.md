@@ -7,16 +7,27 @@ Application de commande pour le café-restaurant 707 (Sept Cent Sept), Tunisie. 
 - Points : 1 point par DT (partie entière du prix unitaire). 10 points = 1 DT de remise (usePoints, multiple de 10,
   plafonné au solde et au montant). Avec remise, points gagnés plafonnés à la partie entière du total payé.
   Annulation : points dépensés rendus, points gagnés retirés, stock rendu.
-- Paiement à table : Espèces ou Carte. Le serveur encaisse avec le moyen réel (paid_method, paid_by).
-- 3 terrasses (table `floors`, avec table_from/table_to). Le client choisit terrasse + table ; la table doit exister.
+- Paiement à table : le client ne choisit rien. Le serveur note Espèces ou Carte à l'encaissement (paid_method, paid_by).
+- 3 terrasses (table `floors`, avec table_from/table_to). La table vient uniquement du QR code (?etage=1&table=4) :
+  le client ne choisit rien. Retenue 4 h sur le téléphone, puis il doit rescanner.
 - Journée de travail : Africa/Tunis, commence à 5 h (lib/day.js). « Aujourd'hui », caisse et rapports l'utilisent.
 - Statuts : nouvelle → en_preparation → servie → payee ; annulee depuis nouvelle/en_preparation.
   ready_at : cuisine + bar ont tout préparé (par ligne : order_items.station / ready_at).
+
+- Bouton admin Dispo / Non dispo (table settings) : fermé = commandes et appels serveur refusés côté serveur ;
+  l'addition reste possible pour les clients encore à table. Les commandes déjà envoyées continuent normalement.
+
+- Terrains de foot (707 Club, 3 terrains, table pitches, créneaux d'1 h, 9 h-00 h, 30 jours) : le client demande un créneau,
+  le chef de terrain l'appelle puis confirme. Le créneau ne s'éteint qu'une fois confirmé (index unique) ; les autres demandes
+  sur cette heure sont refusées automatiquement. Prix par terrain et par heure fixé par l'admin (pitches.price_mil),
+  copié dans la réservation à la demande : un nouveau tarif ne change pas les réservations existantes.
+  Seul le chef de terrain (rôle terrain) peut annuler un match : ni le client, ni l'admin (imposé côté serveur). Indépendant du bouton Dispo / Non dispo du café.
 
 ## Espaces et sécurité
 - Client (`/`) : connexion par code SMS (otp_codes, lib/sms.js ; devCode renvoyé seulement si SMS_PROVIDER=console hors production).
 - Serveur (`/serveur.html`) : uniquement SA terrasse, imposé côté serveur (scopeFloor + canTouchFloor), jamais seulement dans la page.
 - Cuisine / Bar (`/cuisine.html`) : rôle cuisine ou bar, voit seulement sa station.
+- Chef de terrain (`/terrain.html`) : réservations et numéros des clients (rôle terrain ou admin).
 - Admin (`/admin.html`) : tout. Le serveur recalcule toujours prix, points, remise et stock.
 
 ## Base de données

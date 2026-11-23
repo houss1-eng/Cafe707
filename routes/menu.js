@@ -7,7 +7,8 @@ const router = express.Router();
 
 // Menu public : terrasses (avec leurs tables), catégories, produits, options
 router.get("/menu", wrap(async (req, res) => {
-  const [floors, cats, subs, prods, groups, opts] = await Promise.all([
+  const [settings, floors, cats, subs, prods, groups, opts] = await Promise.all([
+    pool.query("SELECT is_open FROM settings WHERE id = 1"),
     pool.query("SELECT id, name, table_from, table_to FROM floors ORDER BY position, id"),
     pool.query("SELECT key, label, title FROM categories ORDER BY position, label"),
     pool.query("SELECT category_key, name FROM subcategories ORDER BY position, name"),
@@ -45,9 +46,17 @@ router.get("/menu", wrap(async (req, res) => {
   });
 
   res.json({
+    open: settings.rows[0].is_open,
     floors: floors.rows.map(f => ({ id: f.id, name: f.name, tableFrom: f.table_from, tableTo: f.table_to })),
     tabs, products,
   });
+}));
+
+// Le café prend-il des commandes en ce moment ?
+router.get("/status", wrap(async (req, res) => {
+  const { rows } = await pool.query("SELECT is_open FROM settings WHERE id = 1");
+  res.set("Cache-Control", "no-store");
+  res.json({ open: rows[0].is_open });
 }));
 
 // Photos des produits (stockées en base)

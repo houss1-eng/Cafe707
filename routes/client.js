@@ -20,6 +20,12 @@ function checkSmsIp(ip) {
   if (++e.n > 10) throw new HttpError(429, "Trop de demandes de code, réessaie plus tard");
 }
 
+// Café fermé par l'admin : aucune commande ni appel. FOR SHARE : une fermeture attend les commandes en cours d'envoi.
+async function assertOpen(db, lock = false) {
+  const { rows } = await db.query(`SELECT is_open FROM settings WHERE id = 1${lock ? " FOR SHARE" : ""}`);
+  if (!rows[0].is_open) throw new HttpError(409, "Le 707 est fermé pour le moment");
+}
+
 // Vérifie qu'une table existe dans la terrasse choisie
 async function checkTable(db, floorId, table) {
   if (!Number.isInteger(floorId)) throw new HttpError(400, "Choisis ta terrasse");
@@ -139,6 +145,8 @@ router.get("/client/live", requireClient, wrap(async (req, res) => {
 router.post("/client/calls", requireClient, wrap(async (req, res) => {
   const { floorId, table, kind, payment } = req.body || {};
   if (!["serveur", "addition"].includes(kind)) throw new HttpError(400, "Demande invalide");
+  // L'addition reste possible après la fermeture : les clients encore à table doivent pouvoir payer
+  if (kind === "serveur") await assertOpen(pool);
   if (payment != null && !["Espèces", "Carte"].includes(payment)) throw new HttpError(400, "Paiement invalide");
   const tableNo = await checkTable(pool, floorId, table);
 
@@ -162,7 +170,7 @@ router.post("/client/calls", requireClient, wrap(async (req, res) => {
 // usePoints : points à dépenser (multiple de 10 ; 10 points = 1 DT).
 router.post("/orders", requireClient, wrap(async (req, res) => {
   const { floorId, table, payment, lines, usePoints = 0 } = req.body || {};
-  if (!["Espèces", "Carte"].includes(payment)) throw new HttpError(400, "Paiement invalide");
+  if (payment != null && !["Espèces", "Carte"].includes(payment)) throw new HttpError(400, "Paiement invalide");
   if (!Number.isInteger(usePoints) || usePoints < 0 || usePoints % 10 !== 0) throw new HttpError(400, "Points invalides");
   if (!Array.isArray(lines) || lines.length === 0 || lines.length > 50) throw new HttpError(400, "Panier vide ou trop grand");
   for (const l of lines) {
@@ -175,6 +183,7 @@ router.post("/orders", requireClient, wrap(async (req, res) => {
   const db = await pool.connect();
   try {
     await db.query("BEGIN");
+    await assertOpen(db, true);
     const tableNo = await checkTable(db, floorId, table);
 
     const ids = [...new Set(lines.map(l => l.productId))];
@@ -228,7 +237,7 @@ router.post("/orders", requireClient, wrap(async (req, res) => {
     const { rows: [order] } = await db.query(
       `INSERT INTO orders (client_id, floor_id, table_no, payment, subtotal, discount, total, points_used, points_earned)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-      [req.client.id, floorId, tableNo, payment, toDT(subtotalMil), toDT(discountMil), toDT(totalMil), usePoints, earned]);
+      [req.client.id, floorId, tableNo, payment || null, toDT(subtotalMil), toDT(discountMil), toDT(totalMil), usePoints, earned]);
 
     for (const it of items) {
       await db.query(

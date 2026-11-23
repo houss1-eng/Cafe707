@@ -114,7 +114,7 @@ function orderCard(o, { showFloor = false, isNew = false } = {}) {
       </ul>
       <div class="ocard-foot">
         <span class="total">${fmt(o.total)} DT</span>
-        <span class="pay">${esc(o.paid_method || o.payment)}${o.discount ? ` · −${fmt(o.discount)} en points` : ""}</span>
+        <span class="pay">${esc(o.paid_method || o.payment || "À encaisser")}${o.discount ? ` · −${fmt(o.discount)} en points` : ""}</span>
         <span class="spacer"></span>
         <button class="btn small" data-ticket>Ticket</button>
       </div>
@@ -151,7 +151,7 @@ function printTicket(o) {
       ${o.discount ? `<tr><td>Sous-total</td><td>${fmt(o.subtotal)}</td></tr><tr><td>Points (${o.points_used})</td><td>-${fmt(o.discount)}</td></tr>` : ""}
       <tr class="t"><td>TOTAL DT</td><td>${fmt(o.total)}</td></tr>
     </table>
-    <p>${esc(o.paid_method || o.payment)}${o.status === "payee" ? " · payé" : ""}<br>Merci et à bientôt !</p>
+    <p>${o.status === "payee" ? esc(o.paid_method || o.payment) + " · payé<br>" : ""}Merci et à bientôt !</p>
     <button onclick="print()">Imprimer</button>
     <script>setTimeout(() => print(), 300)<\/script>
   </body></html>`);

@@ -21,9 +21,9 @@ const cart = new Map();
 let currentCat = "pour-toi";
 let currentSub = "";
 let search = "";
-let payMode = "Espèces";
 let usePoints = false;
 let sending = false;
+let IS_OPEN = true;            // false = café fermé par l'admin
 let place = null;              // { floorId, table }
 
 const $ = (id) => document.getElementById(id);
@@ -65,34 +65,44 @@ function toast(msg) {
 }
 
 // ---------------------------------------------------------------------
-// Terrasse + table (pré-remplies par le QR code ?etage=1&table=4)
+// Terrasse + table : viennent uniquement du QR code de la table (?etage=1&table=4)
 // ---------------------------------------------------------------------
+const PLACE_TTL = 4 * 3600e3;   // au-delà, le client doit rescanner (il a pu changer de table)
 const floorOf = (id) => FLOORS.find(f => f.id === id);
 const floorName = (id) => (floorOf(id) || {}).name;
-function tableError(p) {
+function validPlace(p) {
   const f = p && floorOf(p.floorId);
-  if (!f) return "Choisis ta terrasse.";
+  if (!f || !/^\d{1,3}$/.test(String(p.table))) return false;
   const t = Number(p.table);
-  if (!/^\d{1,3}$/.test(String(p.table)) || t < 1) return "Écris le numéro de ta table (chiffres seulement).";
-  if (t < f.tableFrom || t > f.tableTo) return `${f.name} : tables ${f.tableFrom} à ${f.tableTo}.`;
-  return "";
+  return t >= f.tableFrom && t <= f.tableTo;
 }
-const validPlace = (p) => !tableError(p);
 
 function loadPlace() {
   const q = new URLSearchParams(location.search);
-  if (q.get("etage") && q.get("table")) return { floorId: Number(q.get("etage")), table: q.get("table") };
-  try { return JSON.parse(store.get(PLACE_KEY)); } catch { return null; }
+  if (q.has("etage") || q.has("table")) {
+    // Le QR vient d'être scanné : on le retient et on l'enlève de l'adresse,
+    // pour qu'un ancien onglet ou l'historique ne renvoie pas vers une ancienne table
+    history.replaceState(null, "", location.pathname);
+    const scanned = { floorId: Number(q.get("etage")), table: String(Number(q.get("table"))), at: Date.now() };
+    store.set(PLACE_KEY, validPlace(scanned) ? JSON.stringify(scanned) : null);
+    return validPlace(scanned) ? scanned : null;
+  }
+  try {
+    const saved = JSON.parse(store.get(PLACE_KEY));
+    if (saved && saved.at && Date.now() - saved.at < PLACE_TTL && validPlace(saved)) return saved;
+  } catch {}
+  store.set(PLACE_KEY, null);
+  return null;
 }
-function savePlace(p) {
-  place = p;
-  store.set(PLACE_KEY, JSON.stringify(p));
+function forgetPlace() {
+  place = null;
+  store.set(PLACE_KEY, null);
   renderPlace();
 }
 function renderPlace() {
   const ok = validPlace(place);
   const label = ok ? `${floorName(place.floorId)} · Table ${place.table}` : "";
-  $("place-text").textContent = ok ? label : "Choisis ta terrasse et ta table";
+  $("place-text").textContent = ok ? label : "Scanne le QR code de ta table";
   $("place-btn").classList.toggle("missing", !ok);
   $("cover-place").hidden = !ok;
   $("cover-place").innerHTML = `${ic("pin")}${esc(label)}`;
@@ -324,14 +334,15 @@ function renderCart() {
   $("use-points-box").checked = usePoints && t.usable > 0;
   $("use-points-text").innerHTML = `Utiliser <b>${t.usable} points</b> · −${fmt(t.usable / 10)} DT <small>(solde ${CLIENT ? CLIENT.points : 0})</small>`;
 
-  $("order-btn").disabled = rows.length === 0 || sending;
-  $("order-btn").textContent = sending ? "Envoi…"
+  $("order-btn").disabled = rows.length === 0 || sending || !IS_OPEN;
+  $("order-btn").textContent = !IS_OPEN ? "Le 707 est fermé" : sending ? "Envoi…"
     : rows.length ? `Commander · ${fmt(t.total)} DT` : "Envoyer la commande";
   renderAccountPill();
   updateCounts();
 }
 
 function addLine(p, opts = [], delta = 1) {
+  if (delta > 0 && !IS_OPEN) return toast("Le 707 est fermé pour le moment");
   const key = p.id + "|" + opts.map(o => o.id).sort().join(",");
   const existing = cart.get(key);
   const q = (existing ? existing.q : 0) + delta;
@@ -471,7 +482,7 @@ function drawOptionsSheet(first = false) {
       </div>`).join("")}
     <div class="sheet-foot">
       <span class="foot-price">${fmt(unitPrice(p, chosen))} DT</span>
-      <button class="order-btn" id="sheet-add">Ajouter au panier</button>
+      <button class="order-btn" id="sheet-add" ${IS_OPEN ? "" : "disabled"}>${IS_OPEN ? "Ajouter au panier" : "Le 707 est fermé"}</button>
     </div>
   `;
 }
@@ -662,80 +673,35 @@ async function logout() {
   toast("Déconnecté");
 }
 
-// ---- Terrasse + table ----
-let placeDraft = null;
-let placeThen = null;
-
-function openPlace(then = null) {
-  placeThen = then;
-  placeDraft = { floorId: place && floorOf(place.floorId) ? place.floorId : null, table: place ? String(place.table) : "" };
-  showSheet("place");
-  drawPlace();
-}
-
-function drawPlace(error = "") {
-  const f = floorOf(placeDraft.floorId);
-  $("sheet").innerHTML = `
+// ---- Pas de table connue : il faut scanner le QR code ----
+function openPlace() {
+  showSheet("place", `
     ${closeBtn}
-    <h3>Où es-tu assis ?</h3>
-    <p class="base">Pour qu'on t'apporte tout à la bonne table.</p>
-    <div class="opt-group">
-      <h4>1 · Ta terrasse</h4>
-      <div class="floors">
-        ${FLOORS.map(x => `<button class="floor ${placeDraft.floorId === x.id ? "on" : ""}" data-floor="${x.id}">${esc(x.name)}</button>`).join("")}
-      </div>
-    </div>
-    <div class="opt-group">
-      <h4>2 · Numéro de ta table</h4>
-      <input class="search table-input" id="table-input" type="text" inputmode="numeric" pattern="[0-9]*"
-             maxlength="3" placeholder="${f ? `${f.tableFrom} à ${f.tableTo}` : "Ex. 12"}" value="${esc(placeDraft.table)}" autocomplete="off">
-      <p class="hint">${f ? `${esc(f.name)} : tables ${f.tableFrom} à ${f.tableTo}. ` : ""}Le numéro est écrit sur ta table.</p>
-    </div>
-    <p class="form-error" id="place-error">${esc(error)}</p>
-    <button class="order-btn" id="place-ok">${placeThen ? "Valider et continuer" : "Valider"}</button>
-  `;
-}
-
-function confirmPlace() {
-  placeDraft.table = $("table-input").value.trim();
-  const p = { floorId: placeDraft.floorId, table: placeDraft.table };
-  const err = tableError(p);
-  if (err) {
-    drawPlace(err);
-    return $("table-input").focus();
-  }
-  savePlace({ floorId: p.floorId, table: String(Number(p.table)) });
-  closeSheet();
-  const next = placeThen;
-  placeThen = null;
-  if (next) next();
-  else toast(`${floorName(place.floorId)} · Table ${place.table}`);
+    <h3>Scanne ta table</h3>
+    <p class="base">Ouvre l'appareil photo de ton téléphone et scanne le QR code posé sur ta table. On saura tout de suite où t'apporter ta commande.</p>
+    <button class="order-btn" id="place-ok">J'ai compris</button>
+  `);
 }
 
 // ---- Appeler le serveur / l'addition ----
 function openCall() {
+  // Fermé : seule l'addition reste possible, pour les clients encore à table
+  if (!validPlace(place)) return openPlace();
   if (!CLIENT) return openLogin(openCall);
-  if (!validPlace(place)) return openPlace(openCall);
   showSheet("call", `
     ${closeBtn}
     <h3>Appeler le serveur</h3>
-    <p class="base">${esc(floorName(place.floorId))} · Table ${esc(place.table)} · <button class="link inline" id="call-place">changer</button></p>
-    <button class="call-opt" data-call="serveur"><span>${ic("bell")}</span><b>Appeler le serveur</b><small>Il passe à ta table</small></button>
-    <div class="call-opt addition">
-      <span>${ic("list")}</span><b>Demander l'addition</b><small>Comment veux-tu payer ?</small>
-      <div class="call-pay">
-        <button class="btn-pay" data-call="addition" data-pay="Espèces">Espèces</button>
-        <button class="btn-pay" data-call="addition" data-pay="Carte">Carte</button>
-      </div>
-    </div>
+    <p class="base">${esc(floorName(place.floorId))} · Table ${esc(place.table)}</p>
+    <button class="call-opt" data-call="serveur" ${IS_OPEN ? "" : "hidden"}><span>${ic("bell")}</span><b>Appeler le serveur</b><small>Il passe à ta table</small></button>
+    <button class="call-opt" data-call="addition"><span>${ic("list")}</span><b>Demander l'addition</b><small>Ton serveur te l'apporte</small></button>
   `);
 }
 
-async function sendCall(kind, payment) {
+async function sendCall(kind) {
   try {
     await api("/api/client/calls", {
       method: "POST",
-      body: JSON.stringify({ floorId: place.floorId, table: place.table, kind, payment }),
+      body: JSON.stringify({ floorId: place.floorId, table: place.table, kind }),
     });
     closeSheet();
     toast(kind === "addition" ? "Ton serveur arrive avec l'addition" : "Ton serveur est prévenu");
@@ -743,6 +709,7 @@ async function sendCall(kind, payment) {
   } catch (err) {
     toast(err.message);
     if (err.status === 401) { store.set(TOKEN_KEY, null); CLIENT = null; openLogin(openCall); }
+    if (/fermé/i.test(err.message)) refreshOpen();
   }
 }
 
@@ -763,17 +730,9 @@ $("sheet").addEventListener("click", e => {
       }
       break;
     }
-    case "place": {
-      const fl = t("[data-floor]");
-      if (fl) {
-        placeDraft.floorId = Number(fl.dataset.floor);
-        placeDraft.table = $("table-input").value;
-        drawPlace();
-        return $("table-input").focus();
-      }
-      if (t("#place-ok")) confirmPlace();
+    case "place":
+      if (t("#place-ok")) closeSheet();
       break;
-    }
     case "login":
       if (t("#login-ok")) submitLogin();
       if (t("#resend")) { login.step = "phone"; drawLogin(); }
@@ -788,25 +747,23 @@ $("sheet").addEventListener("click", e => {
       if (t("#back-account")) openAccount();
       break;
     case "call": {
-      if (t("#call-place")) return openPlace(openCall);
       const c = t("[data-call]");
-      if (c) sendCall(c.dataset.call, c.dataset.pay);
+      if (c) sendCall(c.dataset.call);
       break;
     }
   }
 });
 $("sheet").addEventListener("input", e => {
-  const digits = { "table-input": 3, "phone-input": 8, "code-input": 6 }[e.target.id];
+  const digits = { "phone-input": 8, "code-input": 6 }[e.target.id];
   if (!digits) return;
   e.target.value = e.target.value.replace(/\D/g, "").slice(0, digits);
-  const err = $("place-error") || $("login-error");
+  const err = $("login-error");
   if (err) err.textContent = "";
   // Code complet : validation automatique
   if (e.target.id === "code-input" && e.target.value.length === 6 && !(login.isNew && !$("name-input").value.trim())) submitLogin();
 });
 $("sheet").addEventListener("keydown", e => {
   if (e.key !== "Enter") return;
-  if (e.target.id === "table-input") confirmPlace();
   if (["phone-input", "code-input", "name-input"].includes(e.target.id)) submitLogin();
 });
 $("sheet-bg").addEventListener("click", e => { if (e.target.id === "sheet-bg") closeSheet(); });
@@ -862,7 +819,7 @@ $("search").addEventListener("input", e => { search = e.target.value; renderMenu
 $("logo-btn").addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
 $("points-pill").addEventListener("click", () => (CLIENT ? openAccount() : openLogin()));
 $("call-btn").addEventListener("click", openCall);
-$("place-btn").addEventListener("click", () => openPlace());
+$("place-btn").addEventListener("click", () => { if (!validPlace(place)) openPlace(); });
 // Barre de navigation du bas
 function setNav(id) {
   document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("on", b.id === id));
@@ -908,6 +865,7 @@ async function openCredits() {
 $("use-points-box").addEventListener("change", e => { usePoints = e.target.checked; renderCart(); });
 
 $("reorder-btn").addEventListener("click", () => {
+  if (!IS_OPEN) return toast("Le 707 est fermé pour le moment");
   cart.clear();
   let skipped = 0;
   LAST_ORDER.forEach(l => {
@@ -920,20 +878,12 @@ $("reorder-btn").addEventListener("click", () => {
   toast(skipped ? "Dernière commande ajoutée (sauf produits épuisés)" : "Ta dernière commande est dans le panier");
 });
 
-document.querySelectorAll(".pay-opt").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".pay-opt").forEach(b => b.classList.remove("on"));
-    btn.classList.add("on");
-    payMode = btn.dataset.pay;
-    renderCart();
-  });
-});
-
 // Envoyer : connexion -> terrasse + table -> envoi
 function startOrder() {
   if (sending || !cart.size) return;
+  if (!IS_OPEN) return toast("Le 707 est fermé pour le moment");
+  if (!validPlace(place)) return openPlace();
   if (!CLIENT) return openLogin(startOrder);
-  if (!validPlace(place)) return openPlace(startOrder);
   sendOrder();
 }
 $("order-btn").addEventListener("click", startOrder);
@@ -945,7 +895,7 @@ async function sendOrder() {
     const lines = [...cart.values()].map(l => ({ productId: l.p.id, qty: l.q, optionIds: l.opts.map(o => o.id) }));
     const res = await api("/api/orders", {
       method: "POST",
-      body: JSON.stringify({ floorId: place.floorId, table: place.table, payment: payMode, lines, usePoints: totals().used }),
+      body: JSON.stringify({ floorId: place.floorId, table: place.table, lines, usePoints: totals().used }),
     });
     CLIENT.points = res.points;
     LAST_ORDER = lines;
@@ -957,7 +907,8 @@ async function sendOrder() {
   } catch (err) {
     toast(err.message);
     if (err.status === 401) { store.set(TOKEN_KEY, null); CLIENT = null; openLogin(startOrder); }
-    else if (/terrasse|table/i.test(err.message)) openPlace(startOrder);
+    else if (/fermé/i.test(err.message)) refreshOpen();
+    else if (/terrasse|table/i.test(err.message)) { forgetPlace(); openPlace(); }
     else if (/points/i.test(err.message)) loadClient().catch(() => {});
     loadMenu().catch(() => {});
   } finally {
@@ -1048,11 +999,31 @@ function stopLive() {
 // ---------------------------------------------------------------------
 // Démarrage
 // ---------------------------------------------------------------------
+// Le café ouvre ou ferme : l'app du client suit toute seule
+function applyOpen(open) {
+  if (open === IS_OPEN) return;
+  IS_OPEN = open;
+  document.body.classList.toggle("closed", !open);
+  $("closed-banner").hidden = open;
+  if (sheetMode === "pizza") closeSheet();
+  renderCart();
+}
+async function refreshOpen() {
+  try {
+    const was = IS_OPEN;
+    applyOpen((await api("/api/status")).open);
+    if (was !== IS_OPEN) toast(IS_OPEN ? "Le 707 est ouvert, tu peux commander" : "Le 707 vient de fermer");
+  } catch {}
+}
+setInterval(refreshOpen, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshOpen(); });
+
 async function loadMenu() {
   const menu = await api("/api/menu");
   FLOORS = menu.floors;
   TABS = [{ key: "pour-toi", label: "Favoris", title: "Nos favoris" }, ...menu.tabs];
   PRODUCTS = menu.products;
+  applyOpen(menu.open);
   // Le panier garde les objets à jour (prix, épuisé) ; un produit retiré du menu sort du panier
   cart.forEach((line, key) => {
     const fresh = byId(line.p.id);
@@ -1064,7 +1035,6 @@ async function init() {
   try {
     await Promise.all([loadMenu(), loadClient().catch(() => {})]);
     place = loadPlace();
-    if (validPlace(place) && new URLSearchParams(location.search).get("table")) savePlace(place);
     renderPlace();
     renderTabs();
     renderMenu();

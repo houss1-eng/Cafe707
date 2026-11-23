@@ -7,9 +7,9 @@ let refreshTimer = null;
 
 const VIEWS = [
   ["dash", "Tableau de bord"], ["orders", "Commandes"], ["cash", "Caisse"], ["reports", "Rapports"],
-  ["menu", "Menu"], ["floors", "Terrasses & QR"], ["team", "Équipe"],
+  ["pitches", "Terrains"], ["menu", "Menu"], ["floors", "Terrasses & QR"], ["team", "Équipe"],
 ];
-const ROLE_LABEL = { admin: "Admin", serveur: "Serveur", cuisine: "Cuisine", bar: "Bar" };
+const ROLE_LABEL = { admin: "Admin", serveur: "Serveur", cuisine: "Cuisine", bar: "Bar", terrain: "Chef de terrain" };
 
 // Journée de travail (commence à 5 h, comme sur le serveur)
 const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -25,8 +25,10 @@ function renderShell() {
       <span class="spacer"></span>
       <a class="btn" href="serveur.html">Vue serveur</a>
       <a class="btn" href="cuisine.html">Cuisine</a>
+      <a class="btn" href="terrain.html">Terrains</a>
       <button class="btn" id="logout">Sortir</button>
     </header>
+    <div class="open-bar" id="open-bar"></div>
     <div class="admin-layout">
       <aside class="side">
         <nav class="bo-tabs" id="views">
@@ -36,6 +38,8 @@ function renderShell() {
       <section id="view"></section>
     </div>`;
   $("logout").addEventListener("click", staffLogout);
+  $("open-bar").addEventListener("click", onOpenClick);
+  loadOpen();
   $("views").addEventListener("click", e => {
     const b = e.target.closest("[data-view]");
     if (!b) return;
@@ -45,13 +49,77 @@ function renderShell() {
   });
 }
 
+// ---- Café disponible / non disponible ----
+let cafeOpen = null;
+function drawOpen() {
+  $("open-bar").className = `open-bar ${cafeOpen ? "is-open" : "is-closed"}`;
+  $("open-bar").innerHTML = `
+    <div><b>${cafeOpen ? "Le café est disponible" : "Le café est non disponible"}</b>
+      <small>${cafeOpen ? "Les clients peuvent commander." : "Aucune nouvelle commande. Les clients voient seulement la carte."}</small></div>
+    <div class="open-switch" role="group" aria-label="État du café">
+      <button data-open-state="1" class="${cafeOpen ? "on" : ""}" aria-pressed="${cafeOpen}">Dispo</button>
+      <button data-open-state="0" class="${cafeOpen ? "" : "on"}" aria-pressed="${!cafeOpen}">Non dispo</button>
+    </div>`;
+}
+async function loadOpen() {
+  try { cafeOpen = (await api("/api/status")).open; drawOpen(); } catch (err) { toast(err.message); }
+}
+async function onOpenClick(e) {
+  const b = e.target.closest("[data-open-state]");
+  if (!b) return;
+  const open = b.dataset.openState === "1";
+  if (open === cafeOpen) return;
+  if (!open && !confirm("Fermer le café ? Plus aucun client ne pourra commander.")) return;
+  try {
+    cafeOpen = (await api("/api/admin/status", { method: "PATCH", body: JSON.stringify({ open }) })).open;
+    drawOpen();
+    toast(cafeOpen ? "Café disponible : les commandes sont ouvertes" : "Café non disponible : commandes arrêtées");
+  } catch (err) { toast(err.message); }
+}
+
 function show() {
   clearInterval(refreshTimer);
   // Nouvelle zone vide : les écouteurs de l'onglet précédent disparaissent avec l'ancienne
   const old = $("view");
   old.replaceWith(old.cloneNode(false));
   ({ dash: showDash, orders: showOrders, cash: showCash, reports: showReports,
-     menu: showMenu, floors: showFloors, team: showTeam })[view]();
+     pitches: showPitches, menu: showMenu, floors: showFloors, team: showTeam })[view]();
+}
+
+// Terrains : même tableau que le chef de terrain
+async function showPitches() {
+  $("view").innerHTML = `
+    <section class="panel"><h2>Prix des terrains</h2>
+      <div class="pp-list" id="pitch-prices"><p class="muted">Chargement…</p></div>
+      <p class="muted pp-note">Prix pour une heure. Un nouveau prix s'applique aux prochaines demandes, pas aux réservations déjà faites.</p>
+    </section>
+    <div id="pitch-board"></div>`;
+  refreshTimer = setInterval(mountPitchBoard($("pitch-board")), 8000);
+  const box = $("pitch-prices");
+  try {
+    const { pitches } = await api("/api/pitches");
+    if (!box.isConnected) return;
+    box.innerHTML = pitches.map(p => `
+      <form class="pp-row" data-pitch="${p.id}">
+        <label for="pp-${p.id}">${esc(p.name)}</label>
+        <span class="pp-input"><input id="pp-${p.id}" type="number" inputmode="decimal" min="0.001" max="9999" step="0.001"
+          placeholder="Prix" value="${p.price ?? ""}"><i>DT / heure</i></span>
+        <button class="btn primary">Enregistrer</button>
+      </form>`).join("");
+  } catch (err) { toast(err.message); }
+  box.addEventListener("submit", async e => {
+    e.preventDefault();
+    const form = e.target.closest("[data-pitch]");
+    const raw = form.querySelector("input").value.trim();
+    const btn = form.querySelector("button");
+    btn.disabled = true;
+    try {
+      const r = await api(`/api/admin/pitches/${form.dataset.pitch}`, { method: "PATCH",
+        body: JSON.stringify({ price: raw === "" ? null : Number(raw) }) });
+      toast(r.price === null ? "Prix retiré" : `Prix enregistré : ${String(r.price).replace(".", ",")} DT / heure`);
+    } catch (err) { toast(err.message); }
+    btn.disabled = false;
+  });
 }
 
 const bars = (rows, label, value, text) => {
@@ -783,7 +851,7 @@ async function showTeam() {
         ${floorSelect('id="n-floor"', floors[0] && floors[0].id)}
         <button class="btn primary">Créer</button>
       </form>
-      <p class="muted" style="margin-top:8px">Serveur : une terrasse, il ne voit qu'elle. Cuisine / Bar : l'écran de préparation. Admin : tout.</p>
+      <p class="muted" style="margin-top:8px">Serveur : une terrasse, il ne voit qu'elle. Cuisine / Bar : l'écran de préparation. Chef de terrain : les réservations. Admin : tout.</p>
     </div>
     <div class="tbl-wrap"><table class="tbl">
       <thead><tr><th>Nom</th><th>Identifiant</th><th>Rôle</th><th>Terrasse</th><th>Actif</th><th>Mot de passe</th></tr></thead>
@@ -849,7 +917,7 @@ startStaffPage({
           <h1>Accès réservé</h1>
           <p>Ce compte n'est pas un compte admin.</p>
           <a class="order-btn" style="display:grid;place-items:center;text-decoration:none"
-             href="${staff.role === "serveur" ? "serveur.html" : "cuisine.html"}">Aller à mon espace</a>
+             href="${staff.role === "serveur" ? "serveur.html" : staff.role === "terrain" ? "terrain.html" : "cuisine.html"}">Aller à mon espace</a>
           <button class="btn" style="margin-top:10px" id="out">Changer de compte</button>
         </div>`;
       return $("out").addEventListener("click", staffLogout);

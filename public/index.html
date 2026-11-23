@@ -15,7 +15,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=8">
+  <link rel="stylesheet" href="styles.css?v=14">
+  <link rel="stylesheet" href="terrains.css?v=14">
 </head>
 <body>
   <!-- Icônes au trait -->
@@ -56,6 +57,14 @@
   </header>
 
   <main class="wrap">
+    <div class="closed-banner" id="closed-banner" hidden>
+      <b>Le 707 est fermé pour le moment</b>
+      <span>Tu peux regarder la carte. Les commandes reprendront à l'ouverture.</span>
+    </div>
+    <button class="pitch-cta" id="pitch-cta">
+      <span><small>707 Club · 3 terrains</small><b>Réserver un terrain</b></span>
+      <em>Voir les horaires</em>
+    </button>
     <div class="live" id="live" hidden></div>
 
     <div class="block-head" id="cats-head"><h2>Catégories</h2><span id="cats-count"></span></div>
@@ -111,14 +120,8 @@
 
       <button class="place" id="place-btn">
         <span class="place-pin"><svg class="i"><use href="#i-pin"/></svg></span>
-        <span id="place-text">Choisis ta terrasse et ta table</span>
-        <span class="place-edit">Modifier</span>
+        <span id="place-text">Scanne le QR code de ta table</span>
       </button>
-
-      <div class="pay">
-        <button class="pay-opt on" data-pay="Espèces">Espèces</button>
-        <button class="pay-opt" data-pay="Carte">Carte</button>
-      </div>
 
       <button class="order-btn" id="order-btn" disabled>Envoyer la commande</button>
     </div>
@@ -135,12 +138,16 @@
     </div>
   </nav>
 
+  <!-- Réservation des terrains -->
+  <section class="pitch-page" id="pitch-page" hidden></section>
+
   <div class="sheet-bg" id="sheet-bg">
     <div class="sheet" id="sheet" role="dialog" aria-modal="true"></div>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=14"></script>
+  <script src="terrains.js?v=14"></script>
 </body>
 </html>

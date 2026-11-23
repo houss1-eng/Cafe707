@@ -234,3 +234,14 @@ a.btn, label.btn { display: inline-grid; place-items: center; text-decoration: n
   .orders { grid-template-columns: 1fr; }
   .bar-row { grid-template-columns: 90px 1fr auto; }
 }
+
+/* Admin : café disponible / non disponible */
+.open-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-top: 16px; padding: 14px 18px; border-radius: var(--radius); background: var(--paper); box-shadow: var(--shadow-sm); border-left: 6px solid var(--ok); }
+.open-bar.is-closed { border-left-color: var(--danger); }
+.open-bar b { display: block; font-size: 16px; font-weight: 600; }
+.open-bar small { color: var(--muted); font-size: 12px; }
+.open-switch { display: flex; padding: 4px; gap: 4px; border-radius: 999px; background: var(--surface); }
+.open-switch button { min-width: 112px; height: 44px; padding: 0 16px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.is-open .open-switch button.on { background: var(--ok); color: #fff; }
+.is-closed .open-switch button.on { background: var(--danger); color: #fff; }
+@media (max-width: 600px) { .open-switch { width: 100%; } .open-switch button { flex: 1; min-width: 0; } }

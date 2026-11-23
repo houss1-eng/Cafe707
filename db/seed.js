@@ -16,6 +16,7 @@ const STAFF = [
   { name: "Serveur terrasse 3", username: "serveur3", password: "707707", role: "serveur", floor: 3 },
   { name: "Cuisine", username: "cuisine", password: "707707", role: "cuisine", floor: null },
   { name: "Bar", username: "bar", password: "707707", role: "bar", floor: null },
+  { name: "Chef de terrain", username: "terrain", password: "707707", role: "terrain", floor: null },
 ];
 
 async function main() {

@@ -77,6 +77,7 @@ router.patch("/staff/orders/:id", floorStaff, wrap(async (req, res) => {
       }
     }
     if (status === "payee") {
+      if (!method && !o.payment) throw new HttpError(400, "Choisis Espèces ou Carte");
       await db.query(
         "UPDATE orders SET paid_by = $2, paid_method = $3, paid_at = now() WHERE id = $1",
         [id, req.staff.id, method || o.payment]);

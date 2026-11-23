@@ -45,6 +45,7 @@ app.use("/api", require("./routes/menu"));
 app.use("/api", require("./routes/client"));
 app.use("/api", require("./routes/staff"));
 app.use("/api", require("./routes/admin"));
+app.use("/api", require("./routes/terrains"));
 
 // ---- Erreurs ----
 app.use("/api", (req, res) => res.status(404).json({ error: "Route inconnue" }));

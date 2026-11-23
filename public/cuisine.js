@@ -79,6 +79,7 @@ startStaffPage({
   subtitle: "Connecte-toi avec le compte cuisine ou bar.",
   onReady(staff) {
     if (staff.role === "serveur") return location.replace("serveur.html");
+    if (staff.role === "terrain") return location.replace("terrain.html");
     me = staff;
     if (me.role === "admin") station = new URLSearchParams(location.search).get("station") === "bar" ? "bar" : "cuisine";
     renderShell();
