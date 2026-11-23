@@ -67,7 +67,9 @@ function toast(msg) {
 // ---------------------------------------------------------------------
 // Terrasse + table : viennent uniquement du QR code de la table (?etage=1&table=4)
 // ---------------------------------------------------------------------
-const PLACE_TTL = 4 * 3600e3;   // au-delà, le client doit rescanner (il a pu changer de table)
+const PLACE_TTL = 4 * 3600e3;    // table de la dernière commande : appeler le serveur / l'addition
+const SCAN_FRESH = 10 * 60e3;    // un scan vaut pour UNE commande, envoyée dans les 10 min
+const freshPlace = (p) => validPlace(p) && p.at && Date.now() - p.at < SCAN_FRESH;
 const floorOf = (id) => FLOORS.find(f => f.id === id);
 const floorName = (id) => (floorOf(id) || {}).name;
 function validPlace(p) {
@@ -89,7 +91,7 @@ function loadPlace() {
   }
   try {
     const saved = JSON.parse(store.get(PLACE_KEY));
-    if (saved && saved.at && Date.now() - saved.at < PLACE_TTL && validPlace(saved)) return saved;
+    if (freshPlace(saved)) return saved;
   } catch {}
   store.set(PLACE_KEY, null);
   return null;
@@ -1030,7 +1032,12 @@ $("reorder-btn").addEventListener("click", () => {
 function startOrder() {
   if (sending || !cart.size) return;
   if (!IS_OPEN) return toast("Le 707 est fermé pour le moment");
-  if (!validPlace(place)) return openPlace(startOrder);
+  // Chaque commande se fait avec un scan récent de la table
+  if (!freshPlace(place)) {
+    if (place) forgetPlace();
+    toast("Scanne le QR code de ta table pour envoyer ta commande");
+    return openPlace(startOrder);
+  }
   if (!CLIENT) return openLogin(startOrder);
   sendOrder();
 }
