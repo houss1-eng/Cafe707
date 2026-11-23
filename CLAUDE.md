@@ -24,7 +24,8 @@ Application de commande pour le café-restaurant 707 (Sept Cent Sept), Tunisie. 
   Seul le chef de terrain (rôle terrain) peut annuler un match : ni le client, ni l'admin (imposé côté serveur). Indépendant du bouton Dispo / Non dispo du café.
 
 ## Espaces et sécurité
-- Client (`/`) : connexion par code SMS (otp_codes, lib/sms.js ; devCode renvoyé seulement si SMS_PROVIDER=console hors production).
+- Client (`/`) : pas de SMS. Numéro + code personnel à 6 chiffres (clients.pin_hash), montré une seule fois à la création, en notification
+  si autorisée. 5 erreurs bloquent le numéro 15 min. Code oublié : Admin → Clients. Le numéro n'est pas vérifié automatiquement.
 - Serveur (`/serveur.html`) : uniquement SA terrasse, imposé côté serveur (scopeFloor + canTouchFloor), jamais seulement dans la page.
 - Cuisine / Bar (`/cuisine.html`) : rôle cuisine ou bar, voit seulement sa station.
 - Chef de terrain (`/terrain.html`) : réservations et numéros des clients (rôle terrain ou admin).
@@ -48,6 +49,11 @@ Application de commande pour le café-restaurant 707 (Sept Cent Sept), Tunisie. 
 - Photos de départ : db/photos/<id>.jpg (Wikimedia Commons, licences libres, auteurs dans credits.json,
   affichés via « Crédits photos » → /api/credits). `npm run photos` les ajoute aux produits sans photo.
 - Fichiers CSS/JS appelés avec ?v=N dans les pages HTML : augmenter N à chaque modification.
+
+## Vercel
+- server.js exporte app ; si VERCEL est défini, pas de listen ni de migration au démarrage (npm run db:migrate avec l'adresse directe Neon).
+- DATABASE_URL en ligne = adresse « pooled » Neon. Pas d'état en mémoire ni de setInterval côté serveur : limites dans rate_limits.
+- express.static est ignoré sur Vercel : les fichiers de public/ passent par son CDN, en-têtes dans vercel.json.
 
 ## Tests
 - `BASE=http://localhost:3000 npm test` (scripts/smoke-test.js) sur une base fraîchement remplie.

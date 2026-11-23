@@ -86,11 +86,9 @@ router.get("/qr.svg", wrap(async (req, res) => {
 }));
 
 // Auteurs et licences des photos de départ (Wikimedia Commons)
-const fs = require("fs");
-const path = require("path");
+const credits = require("../db/photos/credits.json");   // require : le fichier part avec la fonction Vercel
 router.get("/credits", (req, res) => {
-  const f = path.join(__dirname, "..", "db", "photos", "credits.json");
-  const c = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : {};
+  const c = credits;
   res.set("Cache-Control", "public, max-age=3600");
   res.json(Object.entries(c).map(([id, x]) => ({ productId: Number(id), author: x.author, license: x.license, source: x.source })));
 });

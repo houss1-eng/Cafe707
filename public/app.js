@@ -1,4 +1,4 @@
-// Espace client. Menu, connexion (code SMS), commandes, appels et suivi passent par l'API.
+// Espace client. Menu, connexion (numéro + code personnel), commandes, appels et suivi passent par l'API.
 
 // ---------------------------------------------------------------------
 // État
@@ -500,9 +500,10 @@ function toggleOpt(id) {
   $("sheet").scrollTop = scroll;
 }
 
-// ---- Connexion par code SMS ----
+// ---- Connexion sans SMS : numéro + code personnel ----
 let afterLogin = null;
-let login = { step: "phone", phone: "", isNew: false, devCode: "" };
+let login = { step: "phone", phone: "" };
+let newCode = "";
 
 function renderAccountPill() {
   $("acc-label").textContent = CLIENT ? `${CLIENT.points} pts` : "Compte";
@@ -511,45 +512,87 @@ function renderAccountPill() {
 
 function openLogin(then = null) {
   afterLogin = then;
-  login = { step: "phone", phone: "", isNew: false, devCode: "" };
+  login = { step: "phone", phone: "" };
   showSheet("login");
   drawLogin();
 }
 
 function drawLogin(error = "") {
-  const codeStep = login.step === "code";
+  const { step } = login;
+  const shown = esc(login.phone.replace(/(\d{2})(\d{3})(\d{3})/, "$1 $2 $3"));
   $("sheet").innerHTML = `
     ${closeBtn}
-    <h3>${codeStep && login.isNew ? "Bienvenue au 707 !" : "Ton espace client"}</h3>
-    <p class="base">${codeStep
-      ? `Code envoyé par SMS au ${esc(login.phone.replace(/(\d{2})(\d{3})(\d{3})/, "$1 $2 $3"))}.`
+    <h3>${step === "name" ? "Bienvenue au 707 !" : step === "code" ? "Content de te revoir" : "Ton espace client"}</h3>
+    <p class="base">${step === "name" ? `Crée ton compte avec le ${shown}.`
+      : step === "code" ? `Écris ton code personnel pour le ${shown}.`
       : "Ton numéro te permet de gagner des points, de les utiliser et de suivre tes commandes."}</p>
-    ${codeStep ? `
-      ${login.isNew ? `
-      <div class="opt-group">
-        <h4>Ton prénom</h4>
-        <input class="search" id="name-input" type="text" maxlength="40" placeholder="Ex. Sami" autocomplete="given-name">
-      </div>` : ""}
-      <div class="opt-group">
-        <h4>Code à 6 chiffres</h4>
-        <input class="search table-input" id="code-input" type="text" inputmode="numeric" maxlength="6"
-               placeholder="••••••" autocomplete="one-time-code">
-        ${login.devCode ? `<p class="hint">Mode test (pas de SMS) : le code est <b>${esc(login.devCode)}</b></p>` : ""}
-        <button class="link" id="resend">Changer de numéro</button>
-      </div>`
-    : `
+    ${step === "phone" ? `
       <div class="opt-group">
         <h4>Numéro de téléphone</h4>
         <input class="search table-input" id="phone-input" type="tel" inputmode="numeric" maxlength="8"
                placeholder="Ex. 22123456" value="${esc(login.phone)}" autocomplete="tel">
-      </div>`}
+      </div>` : ""}
+    ${step === "name" ? `
+      <div class="opt-group">
+        <h4>Ton prénom</h4>
+        <input class="search" id="name-input" type="text" maxlength="40" placeholder="Ex. Sami" autocomplete="given-name">
+        <button class="link" id="resend">Changer de numéro</button>
+      </div>` : ""}
+    ${step === "code" ? `
+      <div class="opt-group">
+        <h4>Code à 6 chiffres</h4>
+        <input class="search table-input" id="code-input" type="text" inputmode="numeric" maxlength="6"
+               placeholder="••••••" autocomplete="one-time-code">
+        <p class="hint">Code oublié ? Demande un nouveau code au 707.</p>
+        <button class="link" id="resend">Changer de numéro</button>
+      </div>` : ""}
     <p class="form-error" id="login-error">${esc(error)}</p>
-    <button class="order-btn" id="login-ok">${codeStep ? "Valider" : "Recevoir mon code"}</button>
+    <button class="order-btn" id="login-ok">${step === "name" ? "Créer mon compte" : step === "code" ? "Valider" : "Continuer"}</button>
   `;
   setTimeout(() => {
-    const el = $(codeStep ? (login.isNew ? "name-input" : "code-input") : "phone-input");
+    const el = $({ phone: "phone-input", name: "name-input", code: "code-input" }[step]);
     if (el) el.focus();
   }, 50);
+}
+
+// Notification du téléphone (passe par le service worker, obligatoire sur Android)
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+async function systemNotify(body) {
+  try {
+    const reg = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    if (reg) return await reg.showNotification("707 Café", { body, icon: "logo707.png" });
+    new Notification("707 Café", { body, icon: "logo707.png" });
+  } catch {}
+}
+function askNotify() {
+  if (!("Notification" in window)) return Promise.resolve("denied");
+  if (Notification.permission !== "default") return Promise.resolve(Notification.permission);
+  try { return Promise.resolve(Notification.requestPermission()).catch(() => "denied"); }
+  catch { return Promise.resolve("denied"); }
+}
+
+async function finishLogin(token) {
+  store.set(TOKEN_KEY, token);
+  await loadClient();
+  renderMenu();
+  startLive();
+}
+function continueAfterLogin() {
+  closeSheet();
+  const next = afterLogin;
+  afterLogin = null;
+  if (next) next();
+}
+
+// Le code du nouveau client : à l'écran et en notification
+function showNewCode(code) {
+  newCode = code;
+  showSheet("code", `
+    <h3>Ton code 707</h3>
+    <p class="base">Garde-le bien : il te servira pour te reconnecter sur un autre téléphone. Ne le donne à personne.</p>
+    <div class="code-notice" id="code-value">${esc(code.slice(0, 3))} ${esc(code.slice(3))}</div>
+    <button class="link code-copy" id="code-copy">Copier le code</button>
+    <button class="order-btn" id="code-ok">C'est noté</button>`);
 }
 
 async function submitLogin() {
@@ -559,24 +602,26 @@ async function submitLogin() {
     if (login.step === "phone") {
       login.phone = $("phone-input").value.replace(/\D/g, "");
       if (!/^\d{8}$/.test(login.phone)) return drawLogin("Le numéro doit avoir 8 chiffres.");
-      const r = await api("/api/client/code", { method: "POST", body: JSON.stringify({ phone: login.phone }) });
-      login = { ...login, step: "code", isNew: r.isNew, devCode: r.devCode || "" };
+      const r = await api("/api/client/check", { method: "POST", body: JSON.stringify({ phone: login.phone }) });
+      login.step = r.isNew ? "name" : "code";
       return drawLogin();
     }
+    if (login.step === "name") {
+      const name = $("name-input").value.trim();
+      if (name.length < 2) return drawLogin("Écris ton prénom.");
+      const permission = askNotify();      // demandé pendant le geste du client
+      const r = await api("/api/client/register", { method: "POST", body: JSON.stringify({ phone: login.phone, name }) });
+      await finishLogin(r.token);
+      showNewCode(r.code);
+      permission.then(p => { if (p === "granted") systemNotify(`Bienvenue ${r.client.name} ! Ton code 707 : ${r.code}`); });
+      return;
+    }
     const code = $("code-input").value.replace(/\D/g, "");
-    const name = $("name-input") ? $("name-input").value.trim() : "";
-    if (login.isNew && name.length < 2) return drawLogin("Écris ton prénom.");
     if (code.length !== 6) return drawLogin("Le code a 6 chiffres.");
-    const r = await api("/api/client/verify", { method: "POST", body: JSON.stringify({ phone: login.phone, code, name }) });
-    store.set(TOKEN_KEY, r.token);
-    await loadClient();
-    closeSheet();
+    const r = await api("/api/client/login", { method: "POST", body: JSON.stringify({ phone: login.phone, code }) });
+    await finishLogin(r.token);
     toast(`Salut ${CLIENT.name} · ${CLIENT.points} points`);
-    renderMenu();
-    startLive();
-    const next = afterLogin;
-    afterLogin = null;
-    if (next) next();
+    continueAfterLogin();
   } catch (err) {
     drawLogin(err.message);
   } finally {
@@ -737,6 +782,13 @@ $("sheet").addEventListener("click", e => {
       if (t("#login-ok")) submitLogin();
       if (t("#resend")) { login.step = "phone"; drawLogin(); }
       break;
+    case "code":
+      if (t("#code-copy")) {
+        Promise.resolve().then(() => navigator.clipboard.writeText(newCode))
+          .then(() => toast("Code copié")).catch(() => toast("Note ton code : " + newCode));
+      }
+      if (t("#code-ok")) { newCode = ""; continueAfterLogin(); }
+      break;
     case "account": {
       if (t("#logout-btn")) return logout();
       const r = t("[data-receipt]");
@@ -760,14 +812,15 @@ $("sheet").addEventListener("input", e => {
   const err = $("login-error");
   if (err) err.textContent = "";
   // Code complet : validation automatique
-  if (e.target.id === "code-input" && e.target.value.length === 6 && !(login.isNew && !$("name-input").value.trim())) submitLogin();
+  if (e.target.id === "code-input" && e.target.value.length === 6) submitLogin();
 });
 $("sheet").addEventListener("keydown", e => {
   if (e.key !== "Enter") return;
   if (["phone-input", "code-input", "name-input"].includes(e.target.id)) submitLogin();
 });
-$("sheet-bg").addEventListener("click", e => { if (e.target.id === "sheet-bg") closeSheet(); });
-document.addEventListener("keydown", e => { if (e.key === "Escape" && sheetMode) closeSheet(); });
+// Le code du nouveau client ne se ferme que par « C'est noté »
+$("sheet-bg").addEventListener("click", e => { if (e.target.id === "sheet-bg" && sheetMode !== "code") closeSheet(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && sheetMode && sheetMode !== "code") closeSheet(); });
 
 // ---------------------------------------------------------------------
 // Menu, panier, onglets
@@ -980,7 +1033,7 @@ function notify(msg) {
   toast(msg);
   if (navigator.vibrate) navigator.vibrate([150, 80, 150]);
   if (document.hidden && "Notification" in window && Notification.permission === "granted") {
-    try { new Notification("707 Café", { body: msg, icon: "logo707.png" }); } catch {}
+    systemNotify(msg);
   }
 }
 

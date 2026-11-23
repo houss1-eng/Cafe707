@@ -7,7 +7,7 @@ let refreshTimer = null;
 
 const VIEWS = [
   ["dash", "Tableau de bord"], ["orders", "Commandes"], ["cash", "Caisse"], ["reports", "Rapports"],
-  ["pitches", "Terrains"], ["menu", "Menu"], ["floors", "Terrasses & QR"], ["team", "Équipe"],
+  ["pitches", "Terrains"], ["menu", "Menu"], ["floors", "Terrasses & QR"], ["clients", "Clients"], ["team", "Équipe"],
 ];
 const ROLE_LABEL = { admin: "Admin", serveur: "Serveur", cuisine: "Cuisine", bar: "Bar", terrain: "Chef de terrain" };
 
@@ -83,7 +83,7 @@ function show() {
   const old = $("view");
   old.replaceWith(old.cloneNode(false));
   ({ dash: showDash, orders: showOrders, cash: showCash, reports: showReports,
-     pitches: showPitches, menu: showMenu, floors: showFloors, team: showTeam })[view]();
+     pitches: showPitches, menu: showMenu, floors: showFloors, clients: showClients, team: showTeam })[view]();
 }
 
 // Terrains : même tableau que le chef de terrain
@@ -829,6 +829,43 @@ async function showFloors() {
         return run(() => api(`/api/admin/floors/${tr.dataset.fid}`, { method: "DELETE" }), "Terrasse supprimée");
     }
   });
+}
+
+// =====================================================================
+// Clients : code oublié
+// =====================================================================
+async function showClients() {
+  $("view").innerHTML = `
+    <div class="panel">
+      <h2>Clients</h2>
+      <div class="bo-filters"><input id="c-search" type="search" placeholder="Chercher un numéro ou un prénom" aria-label="Chercher un client"></div>
+      <div id="c-code"></div>
+      <div id="c-list"><p class="muted">Chargement…</p></div>
+      <p class="muted" style="margin-top:10px">Code oublié : vérifie que c'est bien le client, puis donne-lui le nouveau code.</p>
+    </div>`;
+  const load = async () => {
+    try {
+      const list = await api(`/api/admin/clients?q=${encodeURIComponent($("c-search").value.trim())}`);
+      if (!$("c-list")) return;
+      $("c-list").innerHTML = list.length ? `<div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Nom</th><th>Numéro</th><th>Points</th><th>Code</th></tr></thead>
+        <tbody>${list.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.phone)}</td><td>${c.points}</td>
+          <td><button class="btn small" data-newcode="${c.id}" data-name="${esc(c.name)}">${c.hasCode ? "Nouveau code" : "Créer le code"}</button></td></tr>`).join("")}</tbody>
+      </table></div>` : `<p class="muted">Aucun client trouvé.</p>`;
+    } catch (err) { toast(err.message); }
+  };
+  let wait;
+  $("c-search").addEventListener("input", () => { clearTimeout(wait); wait = setTimeout(load, 250); });
+  $("view").addEventListener("click", async e => {
+    const b = e.target.closest("[data-newcode]");
+    if (!b || !confirm(`Créer un nouveau code pour ${b.dataset.name} ? L'ancien ne marchera plus.`)) return;
+    try {
+      const r = await api(`/api/admin/clients/${b.dataset.newcode}/code`, { method: "POST" });
+      $("c-code").innerHTML = `<div class="client-code">Nouveau code de ${esc(r.name)} (${esc(r.phone)})<b>${esc(r.code.slice(0, 3))} ${esc(r.code.slice(3))}</b></div>`;
+      await load();
+    } catch (err) { toast(err.message); }
+  });
+  load();
 }
 
 // =====================================================================

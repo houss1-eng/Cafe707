@@ -1,24 +1,14 @@
-const crypto = require("crypto");
 const express = require("express");
 const pool = require("../db/pool");
 const { HttpError, wrap, toMil, toDT, pointsOf } = require("../lib/http");
-const { createSession, deleteSession, requireClient } = require("../lib/auth");
+const { createSession, deleteSession, requireClient, hashPassword, verifyPassword, newClientCode } = require("../lib/auth");
 const { listOrders } = require("../lib/orders");
-const { sendSms, exposeCodeForDev } = require("../lib/sms");
 const { bizDay, TODAY } = require("../lib/day");
+const limit = require("../lib/limit");
 
 const router = express.Router();
 
 const cleanPhone = (v) => String(v || "").replace(/\D/g, "");
-const codeHash = (phone, code) => crypto.createHash("sha256").update(`${phone}:${code}`).digest("hex");
-
-// Limite par adresse IP pour les SMS (chaque SMS coûte) : 10 par heure
-const smsByIp = new Map();
-function checkSmsIp(ip) {
-  const now = Date.now(), e = smsByIp.get(ip);
-  if (!e || e.until < now) return smsByIp.set(ip, { n: 1, until: now + 3600e3 });
-  if (++e.n > 10) throw new HttpError(429, "Trop de demandes de code, réessaie plus tard");
-}
 
 // Café fermé par l'admin : aucune commande ni appel. FOR SHARE : une fermeture attend les commandes en cours d'envoi.
 async function assertOpen(db, lock = false) {
@@ -40,65 +30,54 @@ async function checkTable(db, floorId, table) {
   return String(t);
 }
 
-// ---- Connexion : 1) demander un code SMS ----
-router.post("/client/code", wrap(async (req, res) => {
-  const phone = cleanPhone((req.body || {}).phone);
+// ---- Connexion sans SMS : numéro + code personnel à 6 chiffres ----
+const phoneOf = (body) => {
+  const phone = cleanPhone((body || {}).phone);
   if (!/^\d{8}$/.test(phone)) throw new HttpError(400, "Numéro de téléphone invalide (8 chiffres)");
+  return phone;
+};
 
-  const { rows: [prev] } = await pool.query(
-    `SELECT sent_at > now() - interval '60 seconds' AS too_soon,
-            CASE WHEN window_at > now() - interval '1 hour' THEN sends ELSE 0 END AS sends
-       FROM otp_codes WHERE phone = $1`, [phone]);
-  if (prev && prev.too_soon) throw new HttpError(429, "Attends une minute avant de redemander un code");
-  if (prev && prev.sends >= 5) throw new HttpError(429, "Trop de codes demandés, réessaie dans une heure");
-  checkSmsIp(req.ip);
-
-  const code = String(crypto.randomInt(0, 1e6)).padStart(6, "0");
-  await pool.query(
-    `INSERT INTO otp_codes (phone, code_hash, expires_at) VALUES ($1, $2, now() + interval '10 minutes')
-     ON CONFLICT (phone) DO UPDATE SET
-       code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at, attempts = 0, sent_at = now(),
-       sends = CASE WHEN otp_codes.window_at > now() - interval '1 hour' THEN otp_codes.sends + 1 ELSE 1 END,
-       window_at = CASE WHEN otp_codes.window_at > now() - interval '1 hour' THEN otp_codes.window_at ELSE now() END`,
-    [phone, codeHash(phone, code)]);
-
-  try {
-    await sendSms(phone, `707 Café : ton code est ${code} (valable 10 min).`);
-  } catch {
-    throw new HttpError(502, "SMS non envoyé, réessaie dans un instant");
-  }
-  const { rows: known } = await pool.query("SELECT 1 FROM clients WHERE phone = $1", [phone]);
-  res.json({ sent: true, isNew: !known.length, ...(exposeCodeForDev() ? { devCode: code } : {}) });
+// 1) Ce numéro a-t-il déjà un compte ? (limites larges : tout le café peut partager le même Wi-Fi)
+router.post("/client/check", wrap(async (req, res) => {
+  const phone = phoneOf(req.body);
+  if (await limit.hit(`check:${req.ip}`, 600) > 120) throw new HttpError(429, "Trop d'essais, réessaie dans quelques minutes");
+  const { rows } = await pool.query("SELECT 1 FROM clients WHERE phone = $1", [phone]);
+  res.json({ isNew: !rows.length });
 }));
 
-// ---- Connexion : 2) vérifier le code ----
-router.post("/client/verify", wrap(async (req, res) => {
-  const phone = cleanPhone((req.body || {}).phone);
-  const code = String((req.body || {}).code || "").replace(/\D/g, "");
+// 2a) Nouveau compte : le code est renvoyé cette seule fois
+router.post("/client/register", wrap(async (req, res) => {
+  const phone = phoneOf(req.body);
   const name = String((req.body || {}).name || "").trim().slice(0, 40);
-  if (!/^\d{8}$/.test(phone) || !/^\d{6}$/.test(code)) throw new HttpError(400, "Code invalide");
-
-  const { rows: [client0] } = await pool.query("SELECT id FROM clients WHERE phone = $1", [phone]);
-  if (!client0 && name.length < 2) throw new HttpError(400, "Écris ton prénom");
-
-  const { rows: [otp] } = await pool.query(
-    "SELECT code_hash, attempts, expires_at > now() AS valid FROM otp_codes WHERE phone = $1", [phone]);
-  if (!otp || !otp.valid) throw new HttpError(400, "Code expiré, demande un nouveau code");
-  if (otp.attempts >= 5) throw new HttpError(429, "Trop d'essais, demande un nouveau code");
-  const a = Buffer.from(otp.code_hash, "hex"), b = Buffer.from(codeHash(phone, code), "hex");
-  if (!crypto.timingSafeEqual(a, b)) {
-    await pool.query("UPDATE otp_codes SET attempts = attempts + 1 WHERE phone = $1", [phone]);
-    throw new HttpError(400, "Code incorrect");
-  }
-  // Code utilisé une seule fois ; garder la date d'envoi pour la limite d'une minute
-  await pool.query("UPDATE otp_codes SET expires_at = now(), attempts = 5 WHERE phone = $1", [phone]);
-
+  if (name.length < 2) throw new HttpError(400, "Écris ton prénom");
+  if (await limit.hit(`register:${req.ip}`, 3600) > 30) throw new HttpError(429, "Trop de comptes créés, réessaie plus tard");
+  const code = newClientCode();
   const { rows: [client] } = await pool.query(
-    `INSERT INTO clients (name, phone) VALUES ($1, $2)
-     ON CONFLICT (phone) DO UPDATE SET phone = EXCLUDED.phone
-     RETURNING id, name, phone, points`, [name || "Client", phone]);
+    `INSERT INTO clients (name, phone, pin_hash) VALUES ($1, $2, $3)
+     ON CONFLICT (phone) DO NOTHING RETURNING id, name, phone, points`, [name, phone, hashPassword(code)]);
+  if (!client) throw new HttpError(409, "Ce numéro a déjà un compte");
   const token = await createSession("client", client.id);
-  res.json({ token, client });
+  res.status(201).json({ token, client, code });
+}));
+
+// 2b) Compte existant : 5 erreurs bloquent ce numéro 15 min
+router.post("/client/login", wrap(async (req, res) => {
+  const phone = phoneOf(req.body);
+  const code = String((req.body || {}).code || "").replace(/\D/g, "");
+  const phoneKey = `pin:${phone}`, ipKey = `pinip:${req.ip}`;
+  if (await limit.countOf(phoneKey) >= 5 || await limit.countOf(ipKey) >= 30) {
+    throw new HttpError(429, "Trop d'essais, réessaie dans 15 minutes");
+  }
+  const { rows: [c] } = await pool.query("SELECT id, name, phone, points, pin_hash FROM clients WHERE phone = $1", [phone]);
+  if (c && !c.pin_hash) throw new HttpError(403, "Demande ton code personnel au 707");
+  if (!c || !/^\d{6}$/.test(code) || !verifyPassword(code, c.pin_hash)) {
+    await limit.hit(ipKey, 600);
+    if (c) await limit.hit(phoneKey, 900);
+    throw new HttpError(400, "Numéro ou code incorrect");
+  }
+  await limit.clear(phoneKey);
+  const token = await createSession("client", c.id);
+  res.json({ token, client: { id: c.id, name: c.name, phone: c.phone, points: c.points } });
 }));
 
 router.post("/client/logout", wrap(async (req, res) => {

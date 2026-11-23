@@ -12,7 +12,7 @@ voient quoi préparer, chaque serveur gère sa terrasse, le gérant voit tout.
 | Cuisine / Bar | `/cuisine.html` | tablette en cuisine, tablette au bar |
 | Admin | `/admin.html` | le gérant : tout |
 
-**Client** : connexion par code SMS, commande, paiement avec ses points (10 points = 1 DT),
+**Client** : compte avec numéro + code personnel, commande, paiement avec ses points (10 points = 1 DT),
 « Appeler le serveur » / « Demander l'addition », suivi en direct (« prête, elle arrive ! »), reçus.
 
 **Serveur** : commandes et appels de sa terrasse, bip à chaque nouveauté, badge « Prête à servir » quand
@@ -52,7 +52,6 @@ npm run db:seed     # base vide uniquement : menu de départ + comptes (ne touch
 npm start           # met la base à jour tout seul (migrations), sans rien effacer
 ```
 
-En local, sans SMS configuré, le code de connexion s'affiche dans l'app (« Mode test »).
 
 Comptes créés par `npm run db:seed` (**à changer tout de suite** dans Admin → Équipe) :
 
@@ -71,7 +70,7 @@ Le plus simple : **Render** (serveurs à Francfort, https automatique, base Post
 
 1. Mettre le projet sur GitHub (dépôt privé).
 2. Sur https://render.com : **New → Blueprint**, choisir le dépôt. `render.yaml` crée le site et la base.
-3. Remplir les variables demandées : `PUBLIC_URL` (l'adresse du site), Twilio (SMS), `ADMIN_PASSWORD`.
+3. Remplir les variables demandées : `PUBLIC_URL` (l'adresse du site), `ADMIN_PASSWORD`.
 4. Une fois en ligne, dans l'onglet **Shell** du site : `npm run db:seed` (une seule fois).
 5. Admin → Terrasses & QR → imprimer les QR codes et les coller sur les tables.
 
@@ -84,17 +83,28 @@ pas pour un vrai café. Autres options : Railway, Fly.io, ou un VPS avec le `Doc
 **Nom de domaine** (ex. `commande.707.tn`) : à acheter chez un registrar, puis à ajouter dans Render → Settings → Custom Domain.
 Mettre ensuite `PUBLIC_URL` à cette adresse **avant** d'imprimer les QR codes.
 
-## SMS (connexion client)
+## Mettre en ligne sur Vercel + Neon
 
-Twilio : créer un compte, acheter un numéro (ou un « Sender ID » alphanumérique « 707 Cafe » si disponible pour
-la Tunisie), puis renseigner `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`.
-Un SMS coûte quelques centimes. Limites intégrées : 1 code par minute et 5 par heure par numéro, 10 par heure par appareil.
+1. Crée une base sur https://neon.com (région Europe) et copie deux adresses : **directe** et **pooled**.
+2. Prépare la base une fois depuis le PC, avec l'adresse **directe** (PowerShell) :
+   `$env:DATABASE_URL="adresse-directe"; $env:ADMIN_PASSWORD="ton-mot-de-passe"; npm run db:seed`
+3. Sur Vercel, ajoute les variables : `DATABASE_URL` (adresse **pooled**), `NODE_ENV=production`, `TZ_NAME=Africa/Tunis`,
+   `DAY_START_HOUR=5`.
+4. Après une nouvelle migration : relancer `npm run db:migrate` avec l'adresse directe **avant** de déployer.
+
+Vercel ne lance pas les migrations tout seul. Les QR codes doivent être générés depuis l'admin en ligne.
+
+## Connexion client (sans SMS)
+
+À la création du compte, le client reçoit un code personnel à 6 chiffres, à l'écran et en notification si elle est autorisée.
+Il reste connecté sur son téléphone et utilise ce code sur un autre appareil. Code oublié : Admin → Clients → Nouveau code.
+Le numéro n'est pas vérifié automatiquement : le chef de terrain le confirme en appelant le client.
 
 ## Structure
 
 - `server.js` : démarrage, sécurité (https, en-têtes), routes.
 - `routes/` : `menu.js` (public, photos, QR), `client.js`, `staff.js` (serveur, cuisine/bar), `admin.js`.
-- `lib/` : `auth.js` (mots de passe, sessions, rôles), `orders.js`, `day.js` (journée de travail), `sms.js`, `http.js`.
+- `lib/` : `auth.js` (mots de passe, sessions, rôles), `orders.js`, `day.js` (journée de travail), `limit.js` (limites anti-abus), `http.js`.
 - `db/migrations/` : structure de la base, appliquée au démarrage. Toute évolution = un nouveau fichier `002_….sql`.
 - `db/seed.sql` + `db/seed.js` : menu et comptes de départ.
 - `public/` : les pages (client, serveur, cuisine, admin).

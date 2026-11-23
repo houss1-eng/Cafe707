@@ -388,3 +388,7 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
 .closed-banner b { display: block; font-size: 15px; font-weight: 600; }
 .closed-banner span { display: block; margin-top: 2px; font-size: 12px; color: #cdbba9; }
 body.closed .dish-qty, body.closed #again-box { display: none !important; }
+
+/* Code personnel du client */
+.code-notice { margin: 18px 0 8px; padding: 18px 10px; border-radius: var(--radius); background: var(--navy); color: var(--gold); font-size: 34px; font-weight: 600; letter-spacing: .08em; text-align: center; }
+.code-copy { display: block; margin: 0 auto 16px; min-height: 40px; }

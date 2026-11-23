@@ -245,3 +245,7 @@ a.btn, label.btn { display: inline-grid; place-items: center; text-decoration: n
 .is-open .open-switch button.on { background: var(--ok); color: #fff; }
 .is-closed .open-switch button.on { background: var(--danger); color: #fff; }
 @media (max-width: 600px) { .open-switch { width: 100%; } .open-switch button { flex: 1; min-width: 0; } }
+
+/* Admin : nouveau code d'un client */
+.client-code { margin-bottom: 12px; padding: 14px 16px; border-radius: 12px; background: var(--navy); color: #fff; }
+.client-code b { display: block; margin-top: 2px; color: var(--gold); font-size: 28px; font-weight: 600; letter-spacing: .08em; }

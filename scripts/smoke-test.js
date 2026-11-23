@@ -1,4 +1,4 @@
-// Test de bout en bout de l'API, sur un serveur lancé en développement (SMS_PROVIDER=console).
+// Test de bout en bout de l'API, sur un serveur lancé.
 // Usage : BASE=http://localhost:3000 npm test   (base fraîchement remplie par npm run db:seed)
 const BASE = (process.env.BASE || "http://localhost:3000").replace(/\/$/, "") + "/api";
 let failed = 0;
@@ -18,11 +18,7 @@ function ok(name, cond, extra = "") {
   if (!cond) failed++;
   console.log(`${cond ? "OK  " : "FAIL"} ${name}${extra ? "  (" + extra + ")" : ""}`);
 }
-async function clientLogin(phone, name) {
-  const c = await call("POST", "/client/code", { phone });
-  if (!c.devCode) throw new Error("Pas de devCode : lance le serveur avec SMS_PROVIDER=console hors production");
-  return call("POST", "/client/verify", { phone, code: c.devCode, name });
-}
+const clientLogin = (phone, name) => call("POST", "/client/register", { phone, name });
 const staff = (username, password = "707707") => call("POST", "/staff/login", { username, password });
 
 (async () => {
@@ -33,14 +29,18 @@ const staff = (username, password = "707707") => call("POST", "/staff/login", { 
   ok("QR d'une table hors terrasse refusé", (await call("GET", "/qr.svg?floor=1&table=40")).s === 404);
 
   // ---- Connexion client par code ----
-  const r1 = await call("POST", "/client/code", { phone: "55123456" });
-  ok("code envoyé, client nouveau", r1.sent && r1.isNew);
-  ok("deuxième code trop tôt refusé", (await call("POST", "/client/code", { phone: "55123456" })).s === 429);
-  ok("mauvais code refusé", (await call("POST", "/client/verify", { phone: "55123456", code: "000000", name: "Sami" })).s === 400);
-  ok("nouveau client sans prénom refusé", (await call("POST", "/client/verify", { phone: "55123456", code: r1.devCode })).s === 400);
-  const sami = await call("POST", "/client/verify", { phone: "55123456", code: r1.devCode, name: "Sami" });
-  ok("client créé", !!sami.token && sami.client.name === "Sami");
-  ok("code réutilisé refusé", (await call("POST", "/client/verify", { phone: "55123456", code: r1.devCode })).s === 400);
+  const r1 = await call("POST", "/client/check", { phone: "55123456" });
+  ok("numéro nouveau reconnu", r1.isNew === true);
+  ok("numéro invalide refusé", (await call("POST", "/client/check", { phone: "123" })).s === 400);
+  ok("nouveau client sans prénom refusé", (await call("POST", "/client/register", { phone: "55123456" })).s === 400);
+  const sami = await clientLogin("55123456", "Sami");
+  ok("client créé avec un code à 6 chiffres", !!sami.token && sami.client.name === "Sami" && /^\d{6}$/.test(sami.code));
+  ok("le code n'est pas dans le compte", !("pin_hash" in sami.client));
+  ok("numéro déjà pris refusé", (await clientLogin("55123456", "Autre")).s === 409);
+  ok("numéro existant reconnu", (await call("POST", "/client/check", { phone: "55123456" })).isNew === false);
+  const wrongSami = sami.code === "000000" ? "111111" : "000000";
+  ok("mauvais code refusé", (await call("POST", "/client/login", { phone: "55123456", code: wrongSami })).s === 400);
+  ok("bon code accepté", !!(await call("POST", "/client/login", { phone: "55123456", code: sami.code })).token);
 
   // ---- Commandes et tables ----
   const T = sami.token;
@@ -199,6 +199,20 @@ const staff = (username, password = "707707") => call("POST", "/staff/login", { 
   ok("la réservation garde son prix", (await call("GET", "/client/reservations", null, T)).find(r => r.id === priced.id).price === 60.5);
   ok("le chef voit le prix", (await call("GET", "/terrain/board", null, chef.token)).pending.find(r => r.id === priced.id).price === 60.5);
   ok("l'admin peut retirer le prix", (await call("PATCH", "/admin/pitches/1", { price: null }, a.token)).price === null);
+
+  // ---- Code personnel oublié ----
+  ok("un serveur ne voit pas les clients", (await call("GET", "/admin/clients", null, s1.token)).s === 403);
+  const found = await call("GET", "/admin/clients?q=55999888", null, a.token);
+  ok("l'admin trouve le client", found.length === 1 && found[0].name === "Karim" && !("pin_hash" in found[0]));
+  ok("un serveur ne crée pas de code", (await call("POST", `/admin/clients/${found[0].id}/code`, {}, s1.token)).s === 403);
+  const wrong = other.code === "000000" ? "111111" : "000000";
+  for (let i = 0; i < 5; i++) await call("POST", "/client/login", { phone: "55999888", code: wrong });
+  ok("numéro bloqué après 5 erreurs", (await call("POST", "/client/login", { phone: "55999888", code: other.code })).s === 429);
+  const reset = await call("POST", `/admin/clients/${found[0].id}/code`, {}, a.token);
+  ok("l'admin donne un nouveau code", /^\d{6}$/.test(reset.code));
+  ok("anciennes sessions coupées", (await call("GET", "/client/me", null, other.token)).s === 401);
+  if (reset.code !== other.code) ok("ancien code refusé", (await call("POST", "/client/login", { phone: "55999888", code: other.code })).s === 400);
+  ok("nouveau code accepté", !!(await call("POST", "/client/login", { phone: "55999888", code: reset.code })).token);
 
   console.log(failed ? `\n${failed} test(s) en échec` : "\nTous les tests passent.");
   process.exitCode = failed ? 1 : 0;

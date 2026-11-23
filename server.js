@@ -5,7 +5,6 @@ const express = require("express");
 const pool = require("./db/pool");
 const migrate = require("./db/migrate");
 const { HttpError } = require("./lib/http");
-const { PROVIDER } = require("./lib/sms");
 
 const app = express();
 // Derrière l'hébergeur (Render, Railway…) : la vraie adresse du client et le https
@@ -13,7 +12,8 @@ app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
 // En ligne : tout en https
-if (process.env.NODE_ENV === "production") {
+const onVercel = Boolean(process.env.VERCEL);
+if (process.env.NODE_ENV === "production" && !onVercel) {
   app.use((req, res, next) => (req.secure || req.path === "/api/health" ? next() : res.redirect(301, `https://${req.get("host")}${req.originalUrl}`)));
 }
 app.use((req, res, next) => {
@@ -57,15 +57,14 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Erreur serveur" });
 });
 
+// Vercel lance l'application lui-même, requête par requête : la base est préparée avant (npm run db:seed)
+module.exports = app;
+
 const PORT = Number(process.env.PORT) || 3000;
 
-// Base à jour avant d'accepter des commandes, puis ménage des vieilles sessions chaque heure
-migrate()
+// Base à jour avant d'accepter des commandes
+if (!onVercel) migrate()
   .then(() => {
-    if (process.env.NODE_ENV === "production" && PROVIDER === "console") {
-      console.warn("ATTENTION : SMS_PROVIDER n'est pas configuré, les codes de connexion ne partent pas par SMS.");
-    }
-    setInterval(() => pool.query("DELETE FROM sessions WHERE expires_at < now()").catch(() => {}), 3600e3);
     // 0.0.0.0 : accessible depuis les téléphones du même Wi-Fi
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`707 en ligne : http://localhost:${PORT}`);

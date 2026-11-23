@@ -11,17 +11,17 @@ const kitchenStaff = auth.requireStaff("cuisine", "bar", "admin");
 
 // ---- Connexion serveur / cuisine / bar / admin ----
 router.post("/staff/login", wrap(async (req, res) => {
-  auth.checkLoginRate(req);
+  await auth.checkLoginRate(req);
   const username = String((req.body || {}).username || "").trim().toLowerCase();
   const password = String((req.body || {}).password || "");
   const { rows: [s] } = await pool.query(
     `SELECT s.id, s.name, s.role, s.floor_id, s.password_hash, s.active, f.name AS floor_name
        FROM staff s LEFT JOIN floors f ON f.id = s.floor_id WHERE s.username = $1`, [username]);
   if (!s || !s.active || !auth.verifyPassword(password, s.password_hash)) {
-    auth.recordLoginFailure(req);
+    await auth.recordLoginFailure(req);
     throw new HttpError(401, "Identifiant ou mot de passe incorrect");
   }
-  auth.clearLoginFailures(req);
+  await auth.clearLoginFailures(req);
   const token = await auth.createSession("staff", s.id);
   res.json({ token, staff: { id: s.id, name: s.name, role: s.role, floorId: s.floor_id, floorName: s.floor_name } });
 }));

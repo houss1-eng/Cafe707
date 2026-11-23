@@ -1,0 +1,39 @@
+# Lancement local : docker compose up -d --build   (app sur http://localhost:3000)
+# POSTGRES_PASSWORD vient du fichier .env. Les données restent dans le volume cafe707-data.
+# Ne jamais utiliser « docker compose down -v » : cela supprime la base.
+name: cafe707
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cafe707
+      POSTGRES_USER: cafe707
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Ajoute POSTGRES_PASSWORD dans .env}
+    volumes:
+      - cafe707-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cafe707 -d cafe707"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development       # local : pas de redirection https
+      PORT: "3000"
+      DATABASE_URL: postgres://cafe707:${POSTGRES_PASSWORD}@db:5432/cafe707
+      DATABASE_SSL: "false"
+      TZ_NAME: Africa/Tunis
+      DAY_START_HOUR: "5"
+
+volumes:
+  cafe707-data:

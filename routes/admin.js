@@ -348,6 +348,28 @@ router.delete("/admin/floors/:id", wrap(async (req, res) => {
 // =====================================================================
 // Équipe
 // =====================================================================
+// Clients : recherche et nouveau code personnel (code oublié). Le code n'est montré qu'une fois.
+router.get("/admin/clients", wrap(async (req, res) => {
+  const q = String(req.query.q || "").trim().slice(0, 40);
+  const { rows } = await pool.query(
+    `SELECT id, name, phone, points, pin_hash IS NOT NULL AS "hasCode" FROM clients
+      WHERE $1 = '' OR strpos(phone, $1) > 0 OR strpos(lower(name), lower($1)) > 0
+      ORDER BY created_at DESC LIMIT 30`, [q]);
+  res.json(rows);
+}));
+
+router.post("/admin/clients/:id/code", wrap(async (req, res) => {
+  const id = int(req.params.id, "Client", 1, 2147483647);
+  const code = auth.newClientCode();
+  const { rows: [c] } = await pool.query(
+    "UPDATE clients SET pin_hash = $2 WHERE id = $1 RETURNING name, phone", [id, auth.hashPassword(code)]);
+  if (!c) throw new HttpError(404, "Client introuvable");
+  // L'ancien code ne vaut plus rien : ses appareils doivent se reconnecter
+  await pool.query("DELETE FROM sessions WHERE kind = 'client' AND subject_id = $1", [id]);
+  await pool.query("DELETE FROM rate_limits WHERE key = $1", [`pin:${c.phone}`]);
+  res.json({ name: c.name, phone: c.phone, code });
+}));
+
 const ROLES = ["serveur", "cuisine", "bar", "terrain", "admin"];
 
 router.get("/admin/staff", wrap(async (req, res) => {
